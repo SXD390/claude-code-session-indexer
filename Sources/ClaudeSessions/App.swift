@@ -69,7 +69,8 @@ struct ClaudeSessionsApp: App {
             ContentView()
                 .environmentObject(store)
         }
-        .defaultSize(width: 1180, height: 740)
+        .defaultSize(width: 1440, height: 900)
+        .windowResizability(.contentMinSize)
         .commands {
             CommandGroup(after: .newItem) {
                 Button("Refresh Sessions") { store.refresh() }

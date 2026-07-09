@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Claude Sessions — Web  ·  launcher for macOS / Linux
+# Reprise — Web  ·  launcher for macOS / Linux
 # Starts the local server and opens your browser. Zero dependencies.
 #
 set -e
@@ -20,7 +20,7 @@ PORT="${PORT:-4747}"
 URL="http://127.0.0.1:${PORT}"
 
 echo ""
-echo "  Starting Claude Sessions on ${URL}"
+echo "  Starting Reprise on ${URL}"
 echo "  (Press Ctrl+C to stop.)"
 echo ""
 

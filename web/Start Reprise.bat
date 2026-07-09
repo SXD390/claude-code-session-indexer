@@ -1,9 +1,9 @@
 @echo off
 setlocal
-title Claude Sessions - Web
+title Reprise - Web
 
 REM ------------------------------------------------------------------
-REM  Double-click launcher for Claude Sessions (Windows).
+REM  Double-click launcher for Reprise (Windows).
 REM  Starts the local server and opens your browser. Zero dependencies.
 REM ------------------------------------------------------------------
 
@@ -22,7 +22,7 @@ if errorlevel 1 (
 if not defined PORT set PORT=4747
 
 echo.
-echo   Starting Claude Sessions on http://127.0.0.1:%PORT%
+echo   Starting Reprise on http://127.0.0.1:%PORT%
 echo   (Close this window to stop the server.)
 echo.
 

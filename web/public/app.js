@@ -1,5 +1,5 @@
 /* =========================================================================
-   Claude Sessions — Web  ·  frontend
+   Reprise — Web  ·  frontend
    Zero dependencies, no build step, fully offline.
    ========================================================================= */
 (function () {

@@ -23,7 +23,7 @@ struct ContentView: View {
     var body: some View {
         NavigationSplitView {
             SidebarView(selection: $selection)
-                .navigationSplitViewColumnWidth(min: 200, ideal: 230, max: 300)
+                .navigationSplitViewColumnWidth(min: 210, ideal: 244, max: 300)
         } content: {
             SessionListView(
                 sessions: visibleSessions,
@@ -31,17 +31,22 @@ struct ContentView: View {
                 sortRaw: $sortRaw,
                 hideEmpty: $hideEmpty
             )
-            .navigationSplitViewColumnWidth(min: 300, ideal: 360, max: 460)
+            .navigationSplitViewColumnWidth(min: 320, ideal: 376, max: 480)
             .searchable(text: $search, prompt: "Search sessions")
         } detail: {
-            if let session = selectedSession {
-                SessionDetailView(session: session)
-                    .id(session.sessionId)
-            } else {
-                EmptyDetailView()
+            Group {
+                if let session = selectedSession {
+                    SessionDetailView(session: session)
+                        .id(session.sessionId)
+                } else {
+                    OverviewDashboard(onSelect: { selectedSessionId = $0 })
+                }
             }
+            .navigationSplitViewColumnWidth(min: 460, ideal: 620)
         }
-        .navigationTitle("Claude Sessions")
+        .navigationTitle("Reprise")
+        .tint(Theme.coral)
+        .frame(minWidth: 960, minHeight: 640)
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Button {
@@ -72,29 +77,253 @@ struct ContentView: View {
     }
 }
 
-struct EmptyDetailView: View {
+// MARK: - Overview dashboard (no-selection state)
+
+struct OverviewDashboard: View {
     @EnvironmentObject var store: SessionStore
+    let onSelect: (String) -> Void
+    @Environment(\.colorScheme) private var scheme
 
     var body: some View {
-        VStack(spacing: 12) {
-            Image(systemName: "bubble.left.and.text.bubble.right")
-                .font(.system(size: 44, weight: .light))
-                .foregroundStyle(.tertiary)
+        ScrollView {
             if store.isLoading && store.sessions.isEmpty {
-                Text("Scanning your Claude Code sessions…")
-                    .foregroundStyle(.secondary)
-                ProgressView()
+                scanning
             } else {
-                Text("Select a session")
-                    .font(.title3)
-                    .foregroundStyle(.secondary)
-                Text("Browse your Claude Code history, copy a resume command,\nor jump straight back into a conversation.")
-                    .font(.callout)
-                    .multilineTextAlignment(.center)
-                    .foregroundStyle(.tertiary)
+                VStack(alignment: .leading, spacing: 22) {
+                    greeting
+                    statGrid
+                    boards
+                }
+                .padding(28)
+                .frame(maxWidth: 900, alignment: .leading)
+                .frame(maxWidth: .infinity, alignment: .center)
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color(nsColor: .textBackgroundColor))
+        .background(Theme.windowBase)
+    }
+
+    private var scanning: some View {
+        VStack(spacing: 14) {
+            AppGlyph(size: 46)
+            Text("Scanning your Claude Code sessions…")
+                .font(.system(size: 15, weight: .medium, design: .rounded))
+                .foregroundStyle(.secondary)
+            ProgressView().controlSize(.small)
+        }
+        .frame(maxWidth: .infinity, minHeight: 460)
+    }
+
+    private var greeting: some View {
+        HStack(spacing: 14) {
+            AppGlyph(size: 40)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Welcome back")
+                    .font(.system(size: 24, weight: .bold, design: .rounded))
+                    .foregroundStyle(.primary)
+                Text("Pick up where you left off, or browse your history.")
+                    .font(.system(size: 13))
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+        }
+    }
+
+    private var statGrid: some View {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 158), spacing: 14)], spacing: 14) {
+            BigStat(value: store.sessions.count, label: "Total sessions",
+                    systemImage: "square.stack.3d.up.fill", tint: Theme.coral, scheme: scheme)
+            BigStat(value: store.namedCount, label: "Named",
+                    systemImage: "tag.fill", tint: Color(hex: 0x9B7ED1), scheme: scheme)
+            BigStat(value: store.activeCount, label: "Running now",
+                    systemImage: "dot.radiowaves.left.and.right", tint: Theme.running,
+                    scheme: scheme, live: store.activeCount > 0)
+            BigStat(value: store.totalPromptCount, label: "Prompts",
+                    systemImage: "arrow.up.message.fill", tint: Color(hex: 0x57A6C9), scheme: scheme)
+        }
+    }
+
+    /// Two dashboard cards side-by-side when the pane is wide, stacked when narrow.
+    private var boards: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(alignment: .top, spacing: 16) {
+                topProjects.frame(minWidth: 288, maxWidth: .infinity)
+                recent.frame(minWidth: 288, maxWidth: .infinity)
+            }
+            VStack(spacing: 16) {
+                topProjects
+                recent
+            }
+        }
+    }
+
+    // MARK: Top projects with bars
+
+    private var topProjects: some View {
+        let projects = store.topProjects(5)
+        let maxCount = max(projects.first?.sessionCount ?? 1, 1)
+        return DashCard(title: "Top projects", systemImage: "chart.bar.fill", scheme: scheme) {
+            if projects.isEmpty {
+                emptyLine("No projects yet")
+            } else {
+                VStack(spacing: 12) {
+                    ForEach(projects) { p in
+                        HStack(spacing: 10) {
+                            ProjectDot(key: p.key, size: 9)
+                            Text(p.displayName)
+                                .font(.system(size: 12.5, weight: .medium))
+                                .lineLimit(1)
+                                .frame(width: 116, alignment: .leading)
+                            GeometryReader { geo in
+                                ZStack(alignment: .leading) {
+                                    Capsule().fill(Theme.field)
+                                    Capsule()
+                                        .fill(Theme.projectColor(for: p.key))
+                                        .frame(width: max(6, geo.size.width * CGFloat(p.sessionCount) / CGFloat(maxCount)))
+                                }
+                            }
+                            .frame(height: 8)
+                            Text("\(p.sessionCount)")
+                                .font(.system(size: 12, weight: .semibold, design: .rounded).monospacedDigit())
+                                .foregroundStyle(.secondary)
+                                .frame(width: 24, alignment: .trailing)
+                        }
+                    }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    // MARK: Recent quick-resume
+
+    private var recent: some View {
+        let sessions = store.recentSessions(5)
+        return DashCard(title: "Jump back in", systemImage: "clock.arrow.circlepath", scheme: scheme) {
+            if sessions.isEmpty {
+                emptyLine("No recent sessions")
+            } else {
+                VStack(spacing: 4) {
+                    ForEach(sessions) { s in
+                        RecentRow(
+                            session: s,
+                            isActive: store.activeBySessionId[s.sessionId] != nil,
+                            onSelect: { onSelect(s.sessionId) }
+                        )
+                    }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func emptyLine(_ text: String) -> some View {
+        Text(text)
+            .font(.callout)
+            .foregroundStyle(.tertiary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, 8)
+    }
+}
+
+// MARK: - Dashboard components
+
+private struct BigStat: View {
+    let value: Int
+    let label: String
+    let systemImage: String
+    let tint: Color
+    let scheme: ColorScheme
+    var live: Bool = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Image(systemName: systemImage)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(tint)
+                Spacer()
+                if live { RunningDot(size: 7) }
+            }
+            Text("\(value)")
+                .font(.system(size: 30, weight: .bold, design: .rounded).monospacedDigit())
+                .foregroundStyle(.primary)
+            Text(label)
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Theme.card, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Theme.border, lineWidth: 1))
+        .cardShadow(scheme)
+    }
+}
+
+private struct DashCard<Content: View>: View {
+    let title: String
+    let systemImage: String
+    let scheme: ColorScheme
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(spacing: 8) {
+                Image(systemName: systemImage)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Theme.coral)
+                Text(title)
+                    .font(.system(size: 14, weight: .semibold, design: .rounded))
+            }
+            content
+        }
+        .padding(18)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Theme.card, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Theme.border, lineWidth: 1))
+        .cardShadow(scheme)
+    }
+}
+
+private struct RecentRow: View {
+    let session: SessionMeta
+    let isActive: Bool
+    let onSelect: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: onSelect) {
+            HStack(spacing: 10) {
+                ProjectDot(key: session.projectKey, size: 8)
+                VStack(alignment: .leading, spacing: 1) {
+                    HStack(spacing: 5) {
+                        if isActive { RunningDot(size: 6) }
+                        Text(session.displayTitle)
+                            .font(.system(size: 12.5, weight: .medium))
+                            .lineLimit(1)
+                    }
+                    HStack(spacing: 4) {
+                        Text(session.projectDisplayName).lineLimit(1)
+                        if let d = session.lastActivityAt {
+                            Text("·").foregroundStyle(.quaternary)
+                            Text(d.formatted(.relative(presentation: .named)))
+                        }
+                    }
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(.tertiary)
+                }
+                Spacer(minLength: 6)
+                Image(systemName: "arrow.uturn.forward.circle.fill")
+                    .font(.system(size: 15))
+                    .foregroundStyle(hovering ? Theme.coral : Color.secondary.opacity(0.5))
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .background(hovering ? Theme.coralTint.opacity(0.10) : Color.clear,
+                        in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .animation(.easeOut(duration: 0.15), value: hovering)
     }
 }

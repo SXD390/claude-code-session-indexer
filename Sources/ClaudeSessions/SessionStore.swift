@@ -86,7 +86,19 @@ final class SessionStore: ObservableObject {
 
             fresh.append(contentsOf: parsed)
             let active = TranscriptScanner.activeSessions()
-            let sorted = fresh.sorted { ($0.lastActivityAt ?? .distantPast) > ($1.lastActivityAt ?? .distantPast) }
+            // Backstop: never surface the app's own `claude -p` summary runs, even if the
+            // encoded-project-key exclusion misses them. These always live in a
+            // ".../Application Support/<app>/summary-runs" working directory; match any such
+            // path so legacy app-support name variants are covered too.
+            let appSupport = FileManager.default
+                .urls(for: .applicationSupportDirectory, in: .userDomainMask).first?.path ?? ""
+            let visible = fresh.filter { meta in
+                guard let cwd = meta.cwd else { return true }
+                let isSummaryRun = cwd.hasSuffix("/summary-runs")
+                    && !appSupport.isEmpty && cwd.hasPrefix(appSupport)
+                return !isSummaryRun
+            }
+            let sorted = visible.sorted { ($0.lastActivityAt ?? .distantPast) > ($1.lastActivityAt ?? .distantPast) }
 
             await MainActor.run {
                 self.sessions = sorted
@@ -125,6 +137,19 @@ final class SessionStore: ObservableObject {
 
     var namedCount: Int { sessions.filter(\.hasCustomName).count }
     var activeCount: Int { sessions.filter { activeBySessionId[$0.sessionId] != nil }.count }
+
+    /// Total user prompts across every session (used by the overview dashboard).
+    var totalPromptCount: Int { sessions.reduce(0) { $0 + $1.userMessageCount } }
+
+    /// Projects ranked by session count, most first.
+    func topProjects(_ limit: Int) -> [ProjectGroup] {
+        Array(projects.sorted { $0.sessionCount > $1.sessionCount }.prefix(limit))
+    }
+
+    /// Most-recently-active non-empty sessions (sessions is stored newest-first).
+    func recentSessions(_ limit: Int) -> [SessionMeta] {
+        Array(sessions.filter { !$0.isEmpty }.prefix(limit))
+    }
 
     func filteredSessions(for item: SidebarItem, search: String, sort: SortOrder, hideEmpty: Bool) -> [SessionMeta] {
         var list = sessions
