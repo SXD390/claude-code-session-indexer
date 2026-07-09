@@ -1288,6 +1288,9 @@ async function deepSearch(q) {
       rl.on('line', (line) => {
         if (perSession >= MAX_PER || results.length >= MAX_TOTAL) { rl.close(); return; }
         if (!line) return;
+        // DoS guard: a single pathological megabyte-long line would blow up the
+        // toLowerCase()/JSON.parse below. Real transcript lines are far smaller.
+        if (line.length > 1000000) return;
         if (line.indexOf('"isSidechain":true') !== -1) return;
         const isUser = line.indexOf('"type":"user"') !== -1;
         const isAssistant = line.indexOf('"type":"assistant"') !== -1;
@@ -1416,13 +1419,21 @@ const MIME = {
   '.woff2': 'font/woff2',
 };
 
+// Defense-in-depth headers sent on every response: block MIME-sniffing, deny
+// framing (anti-clickjacking / rebind-in-iframe), and never leak a Referer.
+const SECURITY_HEADERS = {
+  'X-Content-Type-Options': 'nosniff',
+  'X-Frame-Options': 'DENY',
+  'Referrer-Policy': 'no-referrer',
+};
+
 function sendJson(res, status, obj) {
   const body = JSON.stringify(obj);
-  res.writeHead(status, {
+  res.writeHead(status, Object.assign({
     'Content-Type': 'application/json; charset=utf-8',
     'Cache-Control': 'no-store',
     'Content-Length': Buffer.byteLength(body),
-  });
+  }, SECURITY_HEADERS));
   res.end(body);
 }
 
@@ -1453,7 +1464,17 @@ async function serveStatic(req, res, pathname) {
   if (st.isDirectory()) { res.writeHead(404); res.end('Not found'); return; }
   const ext = path.extname(filePath).toLowerCase();
   const type = MIME[ext] || 'application/octet-stream';
-  res.writeHead(200, { 'Content-Type': type, 'Cache-Control': 'no-cache' });
+  const headers = Object.assign({ 'Content-Type': type, 'Cache-Control': 'no-cache' }, SECURITY_HEADERS);
+  // Lock the SPA down with a CSP: no remote origins, no inline scripts. Inline
+  // *styles* are allowed because the app sets style="" attributes; data: images
+  // cover the inline SVG favicon. Everything (scripts, XHR) is same-origin only.
+  if (ext === '.html') {
+    headers['Content-Security-Policy'] =
+      "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; " +
+      "img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; " +
+      "form-action 'none'; frame-ancestors 'none'";
+  }
+  res.writeHead(200, headers);
   fs.createReadStream(filePath).pipe(res);
 }
 
@@ -1502,6 +1523,15 @@ const server = http.createServer(async (req, res) => {
   // (which would sail through same-origin checks) can't include it at all.
   if (pathname.startsWith('/api/') && req.headers['x-csi-request'] !== '1') {
     return sendJson(res, 403, { error: 'Forbidden', code: 'CSRF' });
+  }
+
+  // Invariant: every session-scoped route's id is a transcript UUID. Rejecting
+  // non-UUIDs up front means the id can never (a) reach a spawned argv (resume),
+  // (b) escape a directory as a path segment, or (c) force a full projects
+  // re-scan inside getSessionMeta() — a cheap request-amplification DoS.
+  const sessionScoped = pathname.match(/^\/api\/sessions\/([^/]+)(?:\/|$)/);
+  if (sessionScoped && !UUID_RE.test(sessionScoped[1])) {
+    return sendJson(res, 400, { error: 'Invalid session id', code: 'BAD_ID' });
   }
 
   try {
