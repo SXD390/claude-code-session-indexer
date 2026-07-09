@@ -26,6 +26,14 @@
     </div>
 
     <nav class="nav-section">
+      <button class="nav-item nav-insights" data-view="insights">
+        <span class="nav-ico" data-ico="chart"></span>
+        <span class="nav-name">Insights</span>
+        <span class="nav-arrow" data-ico="chevronR"></span>
+      </button>
+    </nav>
+
+    <nav class="nav-section">
       <div class="nav-label">Library</div>
       <button class="nav-item" data-filter="all" data-active="true">
         <span class="nav-ico" data-ico="layers"></span>
@@ -63,13 +71,15 @@
   <!-- ============ SESSION LIST ============ -->
   <section class="list-pane">
     <header class="list-head">
-      <div class="search-wrap">
+      <div class="search-wrap" data-deep="false">
         <span class="search-ico" data-ico="search"></span>
         <input id="search" class="search" type="text" placeholder="Search sessions…  ( / )" spellcheck="false" autocomplete="off" />
+        <button class="deep-toggle" id="deepToggle" title="Search inside conversations" aria-pressed="false"><span data-ico="scan"></span></button>
         <button class="search-clear" id="searchClear" aria-label="Clear" hidden><span data-ico="x"></span></button>
       </div>
       <div class="list-toolbar">
         <div class="list-context" id="listContext">All Sessions</div>
+        <button class="journal-btn" id="journalBtn" hidden><span class="jb-ico" data-ico="book"></span><span>Journal</span></button>
         <div class="sort-wrap">
           <button class="sort-btn" id="sortBtn">
             <span data-ico="sort"></span>
@@ -96,7 +106,14 @@
   <section class="detail-pane" id="detailPane">
     <div id="overview" class="overview"></div>
     <div id="detail" class="detail" hidden></div>
+    <div id="journal" class="journal" hidden></div>
   </section>
+
+  <!-- ============ INSIGHTS (full-width dashboard) ============ -->
+  <section class="insights-pane" id="insightsPane" hidden></section>
+
+  <!-- shared chart tooltip -->
+  <div class="viz-tip" id="vizTip" hidden><span class="tip-val"></span><span class="tip-lbl"></span></div>
 
   <!-- ============ FOOTER HINT BAR ============ -->
   <footer class="hintbar" id="hintbar">

@@ -35,6 +35,18 @@
     inbox: '<path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>',
     zap: '<path d="M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z"/>',
     theme: '<path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/>',
+    chart: '<path d="M3 3v16a2 2 0 0 0 2 2h16"/><path d="M18 17V9"/><path d="M13 17V5"/><path d="M8 17v-3"/>',
+    chevronR: '<path d="m9 18 6-6-6-6"/>',
+    scan: '<path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2"/><path d="M7 12h10"/>',
+    book: '<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2Z"/>',
+    download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/>',
+    coins: '<circle cx="8" cy="8" r="6"/><path d="M18.09 10.37A6 6 0 1 1 10.34 18"/><path d="M7 6h1v4"/><path d="m16.71 13.88.7.71-2.82 2.82"/>',
+    gauge: '<path d="m12 14 4-4"/><path d="M3.34 19a10 10 0 1 1 17.32 0"/>',
+    timer: '<line x1="10" x2="14" y1="2" y2="2"/><line x1="12" x2="15" y1="14" y2="11"/><circle cx="12" cy="14" r="8"/>',
+    database: '<ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5V19A9 3 0 0 0 21 19V5"/><path d="M3 12A9 3 0 0 0 21 12"/>',
+    trophy: '<path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"/><path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"/><path d="M4 22h16"/><path d="M10 14.66V17c0 .55-.47.98-.97 1.21C7.85 18.75 7 20.24 7 22"/><path d="M14 14.66V17c0 .55.47.98.97 1.21C16.15 18.75 17 20.24 17 22"/><path d="M18 2H6v7a6 6 0 0 0 12 0V2Z"/>',
+    flame: '<path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z"/>',
+    dollar: '<line x1="12" x2="12" y1="2" y2="22"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>',
   };
   function icon(name) {
     return '<svg class="ic" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' + (ICONS[name] || '') + '</svg>';
@@ -89,6 +101,44 @@
     if (!m) return null;
     return m.replace(/^claude-/, '').replace(/-\d{8}$/, '');
   }
+  // --- analytics formatting (mirrors the spec's number rules) ---
+  function fmtTokens(n) {
+    n = n || 0;
+    if (n < 1000) return String(Math.round(n));
+    if (n < 1e6) return (n / 1e3).toFixed(n < 1e4 ? 1 : 0).replace(/\.0$/, '') + 'K';
+    if (n < 1e9) return (n / 1e6).toFixed(n < 1e7 ? 1 : 0).replace(/\.0$/, '') + 'M';
+    return (n / 1e9).toFixed(1).replace(/\.0$/, '') + 'B';
+  }
+  function fmtCost(n) {
+    n = n || 0;
+    if (n > 0 && n < 1) return '$' + n.toFixed(4);
+    return '$' + n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
+  function fmtDuration(sec) {
+    sec = Math.round(sec || 0);
+    const h = Math.floor(sec / 3600);
+    const m = Math.floor((sec % 3600) / 60);
+    if (h > 0) return h + 'h ' + m + 'm';
+    if (m > 0) return m + 'm';
+    return sec + 's';
+  }
+  const TIER_COLOR = { Fable: '#E38561', Opus: '#8B8FE6', Sonnet: '#5CA0D8', Haiku: '#57B6A6', Other: '#E0A458' };
+  function modelTier(m) {
+    m = m || '';
+    if (m.indexOf('claude-fable') === 0 || m.indexOf('claude-mythos') === 0) return 'Fable';
+    if (m.indexOf('claude-opus') === 0) return 'Opus';
+    if (m.indexOf('claude-sonnet') === 0) return 'Sonnet';
+    if (m.indexOf('claude-haiku') === 0) return 'Haiku';
+    return 'Other';
+  }
+  function tierColor(m) { return TIER_COLOR[modelTier(m)] || '#E0A458'; }
+  const METRICS = {
+    output: { key: 'output', label: 'Output tokens', color: 'var(--viz-output)', hex: '#E38561', kind: 'tokens' },
+    input: { key: 'input', label: 'Input tokens', color: 'var(--viz-input)', hex: '#5CA0D8', kind: 'tokens' },
+    cacheRead: { key: 'cacheRead', label: 'Cache read', color: 'var(--viz-cacheRead)', hex: '#57B6A6', kind: 'tokens' },
+    cacheWrite: { key: 'cacheWrite', label: 'Cache write', color: 'var(--viz-cacheWrite)', hex: '#8B8FE6', kind: 'tokens' },
+    cost: { key: 'cost', label: 'Est. cost', color: 'var(--viz-cost)', hex: '#E0A458', kind: 'cost' },
+  };
 
   // ---- state ----
   const state = {
@@ -103,6 +153,20 @@
     previews: {},
     generating: {},
     summaryErr: {},
+    // signature features
+    view: 'sessions',        // 'sessions' | 'insights'
+    deepMode: false,
+    deepResults: null,
+    deepLoading: false,
+    deepSeq: 0,
+    usage: null,
+    usageLoading: false,
+    range: { preset: '30D', from: null, to: null },
+    metric: 'output',
+    journalProject: null,
+    briefing: {},            // sessionId -> bool
+    briefErr: {},
+    usageDetail: {},         // sessionId -> per-session usage record
   };
 
   // ---- DOM refs ----
@@ -116,6 +180,11 @@
   const elSearchClear = $('#searchClear');
   const elOverview = $('#overview');
   const elDetail = $('#detail');
+  const elJournal = $('#journal');
+  const elInsights = $('#insightsPane');
+  const elDeepToggle = $('#deepToggle');
+  const elJournalBtn = $('#journalBtn');
+  const elVizTip = $('#vizTip');
   const elStatus = $('#statusHint');
   const elSortLabel = $('#sortLabel');
   const elSortMenu = $('#sortMenu');
@@ -148,9 +217,17 @@
       elSessionRows.hidden = false;
       renderSidebar();
       renderList();
-      if (state.selectedId) {
+      if (state.view === 'insights') {
+        // keep the dashboard as-is on background refreshes; only paint on first entry
+        if (isInitial && !state.usage) loadUsage();
+      } else if (elJournal && !elJournal.hidden) {
+        renderJournal(); // refresh journal figures in place
+      } else if (state.selectedId) {
         const s = state.sessions.find((x) => x.sessionId === state.selectedId);
-        if (s) renderDetail(s); else showOverview();
+        // On background refreshes leave the open detail untouched (preserve scroll,
+        // in-progress brief, etc.); only (re)render on the initial load.
+        if (s) { if (isInitial) renderDetail(s); }
+        else showOverview();
       } else {
         showOverview();
       }
@@ -256,6 +333,8 @@
     </button>`;
   }
   function renderList() {
+    if (typeof updateJournalBtn === 'function') updateJournalBtn();
+    if (state.deepMode) { elSkeleton.hidden = true; renderDeepResults(); return; }
     const list = currentList();
     const label = state.filter === 'project' ? state.project
       : state.filter === 'named' ? 'Named'
@@ -284,6 +363,7 @@
     state.selectedId = null;
     $$('.srow').forEach((r) => (r.dataset.active = 'false'));
     elDetail.hidden = true;
+    elJournal.hidden = true;
     elOverview.hidden = false;
     renderOverview();
     app.dataset.detailOpen = 'false';
@@ -397,6 +477,7 @@
 
   function renderDetail(s) {
     elOverview.hidden = true;
+    elJournal.hidden = true;
     elDetail.hidden = false;
     const col = projColor(s.projectName || s.projectKey);
     const badges = [];
@@ -439,6 +520,10 @@
       </div>
 
       <div class="d-section">
+        <div class="brief-card" id="briefCard">${briefCardHTML(s)}</div>
+      </div>
+
+      <div class="d-section">
         <div class="summary-card" id="summaryCard">
           <div class="sc-head">
             <div class="sc-title"><span class="spark"><span>${icon('sparkles')}</span></span> AI Summary</div>
@@ -448,6 +533,11 @@
           </div>
           <div id="summaryBody">${summaryCardHTML(s)}</div>
         </div>
+      </div>
+
+      <div class="d-section">
+        <div class="d-section-h">${icon('coins')} Usage &amp; est. cost</div>
+        <div class="usage-card" id="usageCard">${usageCardHTML(s)}</div>
       </div>
 
       <div class="d-section">
@@ -475,12 +565,135 @@
   }
 
   function wireDetail(s) {
-    const copyCmd = () => copyText(s.resumeCommand, null, 'Command copied');
     $('#cmdCopy').addEventListener('click', (e) => copyText(s.resumeCommand, e.currentTarget));
     $('#copyCmdBtn').addEventListener('click', (e) => copyText(s.resumeCommand, e.currentTarget, 'Command copied'));
     $('#copyIdBtn').addEventListener('click', (e) => copyText(s.sessionId, e.currentTarget, 'Session ID copied'));
     $('#resumeBtn').addEventListener('click', () => resume(s.sessionId));
     $('#genSummaryBtn').addEventListener('click', () => genSummary(s.sessionId));
+    wireBrief(s);
+    loadUsageCard(s);
+  }
+
+  // ---- Pickup Brief card ----
+  function briefStale(s) {
+    if (!s.brief) return false;
+    // stale if session has activity newer than when the brief was generated
+    const gen = Date.parse(s.brief.generatedAt) || 0;
+    const act = Date.parse(s.lastActivityAt) || 0;
+    return act - gen > 60000; // >1 min newer
+  }
+  function briefCardHTML(s) {
+    const hasBrief = s.brief && (s.brief.state || s.brief.nextPrompt);
+    const head = `
+      <div class="brief-head">
+        <div class="brief-title"><span class="spark"><span>${icon('zap')}</span></span> Pickup Brief</div>
+        <button class="btn btn-ghost" id="genBriefBtn" style="padding:6px 12px;font-size:12px">
+          ${icon(hasBrief ? 'refresh' : 'zap')} ${hasBrief ? 'Regenerate' : 'Generate'}
+        </button>
+      </div>`;
+    if (state.briefing[s.sessionId]) {
+      return head + `<div class="sc-loading"><span class="spinner"></span><span>Reading the tail of this session with <b>claude&nbsp;·&nbsp;haiku</b><span class="sc-dots"><span></span><span></span><span></span></span></span></div>`;
+    }
+    if (!hasBrief) {
+      const err = state.briefErr[s.sessionId];
+      return head + (err
+        ? `<div class="sc-error" style="margin-top:8px">${esc(err)}</div>`
+        : `<div class="brief-empty">Generate a one-glance brief to get back into flow: where the work stands, what's still open, and a ready-to-paste prompt to continue.</div>`);
+    }
+    const b = s.brief;
+    let html = head;
+    if (briefStale(s)) {
+      html += `<div class="brief-stale">${icon('clock')}<span>This session has newer activity since the brief was generated — regenerate to refresh.</span></div>`;
+    }
+    html += `<div class="brief-sec"><div class="brief-sec-h">State</div><div class="brief-state">${esc(b.state || '—')}</div></div>`;
+    html += `<div class="brief-sec"><div class="brief-sec-h">Open threads</div>`;
+    if (b.open && b.open.length) {
+      html += `<div class="brief-open">${b.open.map((o) => `<div class="bo">${esc(o)}</div>`).join('')}</div>`;
+    } else {
+      html += `<div class="brief-open"><div class="bo-none">${icon('check')} Nothing left open — clean stopping point.</div></div>`;
+    }
+    html += `</div>`;
+    if (b.nextPrompt) {
+      html += `<div class="brief-sec"><div class="brief-sec-h">Next prompt</div>
+        <div class="next-block">
+          <div class="next-bar"><span class="nb-label">ready to paste</span>
+            <button class="next-copy" id="nextCopy">${icon('copy')} Copy prompt</button></div>
+          <div class="next-text" id="nextText">${esc(b.nextPrompt)}</div>
+        </div></div>`;
+    }
+    html += `<div class="brief-meta">${icon('clock')}<span>Generated ${esc(relTime(b.generatedAt))}</span></div>`;
+    return html;
+  }
+  function wireBrief(s) {
+    const gen = $('#genBriefBtn'); if (gen) gen.addEventListener('click', () => genBrief(s.sessionId));
+    const cp = $('#nextCopy'); if (cp && s.brief) cp.addEventListener('click', (e) => copyText(s.brief.nextPrompt, e.currentTarget, 'Prompt copied'));
+  }
+  async function genBrief(id) {
+    if (state.briefing[id]) return;
+    state.briefing[id] = true;
+    state.briefErr[id] = null;
+    const s = state.sessions.find((x) => x.sessionId === id);
+    if (state.selectedId === id) { $('#briefCard').innerHTML = briefCardHTML(s); hydrateIcons($('#briefCard')); }
+    status('Generating pickup brief via claude CLI…');
+    try {
+      const r = await fetch('/api/sessions/' + encodeURIComponent(id) + '/brief', { method: 'POST' });
+      const data = await r.json();
+      state.briefing[id] = false;
+      if (!r.ok) throw new Error(data.error || 'Brief failed');
+      if (s) s.brief = { state: data.state, open: data.open || [], nextPrompt: data.nextPrompt, generatedAt: data.generatedAt, sessionLastActivity: data.sessionLastActivity };
+      status('Pickup brief ready', 'ok');
+      if (state.selectedId === id && s) { $('#briefCard').innerHTML = briefCardHTML(s); hydrateIcons($('#briefCard')); wireBrief(s); }
+    } catch (e) {
+      state.briefing[id] = false;
+      state.briefErr[id] = e.message;
+      status('Brief failed', 'err');
+      if (state.selectedId === id && s) { $('#briefCard').innerHTML = briefCardHTML(s); hydrateIcons($('#briefCard')); wireBrief(s); }
+    }
+  }
+
+  // ---- per-session Usage card ----
+  function usageCardHTML(s) {
+    const u = s.usage;
+    if (!u || (!u.tokens.input && !u.tokens.output && !u.tokens.cacheRead && !u.tokens.cacheWrite)) {
+      return '<div class="usage-empty">No usage recorded for this session.</div>';
+    }
+    const tk = u.tokens;
+    const tokCell = (k, label, val) => `<div class="ut-cell">
+      <div class="ut-top"><span class="ut-dot" style="background:${METRICS[k].hex}"></span><span class="ut-k">${label}</span></div>
+      <div class="ut-v tnum">${esc(fmtTokens(val))}</div></div>`;
+    const chips = state.usageDetail[s.sessionId];
+    let chipHTML;
+    if (chips) {
+      chipHTML = chips.length
+        ? `<div class="model-chips">${chips.map((m) => `<span class="mchip"><span class="mc-dot" style="background:${tierColor(m.model)}"></span>${esc(shortModel(m.model) || m.model)}<span class="mc-cost">${esc(fmtCost(m.cost))}</span></span>`).join('')}</div>`
+        : '';
+    } else {
+      chipHTML = `<div class="model-chips" id="usageChips"><span class="mchip" style="opacity:.6">Loading models…</span></div>`;
+    }
+    return `
+      <div class="usage-tokens">
+        ${tokCell('input', 'Input', tk.input)}
+        ${tokCell('output', 'Output', tk.output)}
+        ${tokCell('cacheRead', 'Cache read', tk.cacheRead)}
+        ${tokCell('cacheWrite', 'Cache write', tk.cacheWrite)}
+      </div>
+      <div class="usage-costrow">
+        <div class="usage-cost"><span class="uc-num">${esc(fmtCost(u.cost))}</span><span class="uc-lbl">Est. cost (API-equivalent)</span></div>
+        <div class="usage-time">${icon('timer')}${esc(fmtDuration(u.activeSeconds))} active</div>
+      </div>
+      ${chipHTML}`;
+  }
+  async function loadUsageCard(s) {
+    if (state.usageDetail[s.sessionId]) return; // already have model chips
+    try {
+      const r = await fetch('/api/sessions/' + encodeURIComponent(s.sessionId) + '/usage', { cache: 'no-store' });
+      const data = await r.json();
+      state.usageDetail[s.sessionId] = data.byModel || [];
+      if (state.selectedId === s.sessionId) {
+        const card = $('#usageCard');
+        if (card) { card.innerHTML = usageCardHTML(s); hydrateIcons(card); }
+      }
+    } catch (e) { /* leave placeholder */ }
   }
 
   async function loadPreview(s) {
@@ -576,13 +789,653 @@
     }
   }
 
+  // =========================================================================
+  // Chart tooltip (shared) — untrusted labels go in via textContent
+  // =========================================================================
+  function showTip(val, lbl, ev) {
+    elVizTip.querySelector('.tip-val').textContent = val;
+    const l = elVizTip.querySelector('.tip-lbl');
+    l.textContent = lbl || '';
+    l.hidden = !lbl;
+    elVizTip.hidden = false;
+    const pad = 12;
+    let x = ev.clientX + 14, y = ev.clientY - 10;
+    const w = elVizTip.offsetWidth, h = elVizTip.offsetHeight;
+    if (x + w + pad > window.innerWidth) x = ev.clientX - w - 14;
+    if (y + h + pad > window.innerHeight) y = window.innerHeight - h - pad;
+    if (y < pad) y = pad;
+    elVizTip.style.left = x + 'px';
+    elVizTip.style.top = y + 'px';
+  }
+  function hideTip() { elVizTip.hidden = true; }
+
+  // Delegate hover tooltips for any mark carrying data-tv (value) / data-tl (label).
+  function wireTips(root) {
+    root.addEventListener('pointermove', (e) => {
+      const m = e.target.closest('[data-tv]');
+      if (!m) { hideTip(); return; }
+      showTip(m.getAttribute('data-tv'), m.getAttribute('data-tl'), e);
+    });
+    root.addEventListener('pointerleave', hideTip);
+  }
+
+  // =========================================================================
+  // INSIGHTS dashboard
+  // =========================================================================
+  function rangeToParams() {
+    const r = state.range;
+    if (r.preset === 'all') return {};
+    if (r.preset === 'custom') {
+      const p = {};
+      if (r.from) p.from = new Date(r.from + 'T00:00:00').toISOString();
+      if (r.to) p.to = new Date(r.to + 'T23:59:59').toISOString();
+      return p;
+    }
+    const days = r.preset === '7D' ? 7 : r.preset === '30D' ? 30 : 90;
+    const from = new Date();
+    from.setHours(0, 0, 0, 0);
+    from.setDate(from.getDate() - (days - 1));
+    return { from: from.toISOString(), to: new Date().toISOString() };
+  }
+  function rangeLabel() {
+    const r = state.range;
+    if (r.preset === '7D') return 'last 7 days';
+    if (r.preset === '30D') return 'last 30 days';
+    if (r.preset === '90D') return 'last 90 days';
+    if (r.preset === 'all') return 'all time';
+    if (r.from && r.to) return r.from + ' → ' + r.to;
+    return 'custom range';
+  }
+
+  async function loadUsage() {
+    state.usageLoading = true;
+    const scroll = elInsights.querySelector('.insights');
+    if (scroll) scroll.classList.add('ins-loading');
+    else renderInsights(); // first paint shows skeleton frame
+    try {
+      const p = rangeToParams();
+      const qs = new URLSearchParams(p).toString();
+      const r = await fetch('/api/usage' + (qs ? '?' + qs : ''), { cache: 'no-store' });
+      state.usage = await r.json();
+      state.usageLoading = false;
+      renderInsights();
+    } catch (e) {
+      state.usageLoading = false;
+      console.error(e);
+      elInsights.innerHTML = '<div class="insights"><div class="ins-empty">Could not load usage analytics.</div></div>';
+    }
+  }
+
+  function renderInsights() {
+    const u = state.usage;
+    const presets = [['7D', '7D'], ['30D', '30D'], ['90D', '90D'], ['all', 'All']];
+    const segBtns = presets.map(([k, lbl]) =>
+      `<button data-range="${k}" aria-pressed="${state.range.preset === k}">${lbl}</button>`).join('');
+    const cust = state.range;
+    const head = `
+      <div class="ins-head">
+        <div>
+          <h1>Insights</h1>
+          <div class="ins-sub">Usage, time, and cost across your Claude Code sessions · <b>${esc(rangeLabel())}</b></div>
+        </div>
+        <div class="range-row" role="group" aria-label="Time range">
+          <div class="segmented" id="rangeSeg">${segBtns}</div>
+          <span class="range-custom">
+            <input type="date" id="rangeFrom" value="${esc(cust.from || '')}" aria-label="From date" max="${todayStr()}" />
+            <span>–</span>
+            <input type="date" id="rangeTo" value="${esc(cust.to || '')}" aria-label="To date" max="${todayStr()}" />
+          </span>
+        </div>
+      </div>`;
+
+    if (!u || !u.daily) {
+      elInsights.innerHTML = `<div class="insights">${head}<div class="ins-empty">Loading…</div></div>`;
+      wireInsights();
+      return;
+    }
+    if (!u.daily.length) {
+      elInsights.innerHTML = `<div class="insights">${head}<div class="ins-empty">No usage recorded in this range. Try “All”.</div></div>`;
+      wireInsights();
+      return;
+    }
+
+    const t = u.totals;
+    const sessionsActive = u.byProject.reduce((a, p) => a + p.sessions, 0);
+    const stats = `
+      <div class="ins-stats">
+        <div class="ins-stat accent">
+          <div class="is-lbl"><span class="is-ico">${icon('timer')}</span>Time spent</div>
+          <div class="is-num">${esc(fmtDuration(t.activeSeconds))}</div>
+          <div class="is-foot">${esc(rangeLabel())}</div>
+        </div>
+        <div class="ins-stat">
+          <div class="is-lbl"><span class="is-ico">${icon('coins')}</span>Est. cost</div>
+          <div class="is-num">${esc(fmtCost(t.cost))}</div>
+          <div class="is-foot">API-equivalent</div>
+        </div>
+        <div class="ins-stat">
+          <div class="is-lbl"><span class="is-ico">${icon('cpu')}</span>Tokens (in + out)</div>
+          <div class="is-num">${esc(fmtTokens(t.tokens.input + t.tokens.output))}</div>
+          <div class="is-foot">${esc(fmtTokens(t.tokens.cacheRead))} cache read</div>
+        </div>
+        <div class="ins-stat">
+          <div class="is-lbl"><span class="is-ico">${icon('layers')}</span>Sessions active</div>
+          <div class="is-num">${sessionsActive}</div>
+          <div class="is-foot">${esc(rangeLabel())}</div>
+        </div>
+      </div>`;
+
+    const charts = `
+      <div class="viz-grid-2">
+        <div class="viz-card wide">
+          <div class="viz-card-h"><h3>Time spent per ${u.daily.length > 60 ? 'week' : 'day'}</h3><span class="vh-sub">hours active</span></div>
+          ${timeBarChart(u.daily)}
+        </div>
+      </div>
+      <div class="viz-grid-2">
+        <div class="viz-card wide">
+          <div class="viz-card-h">
+            <h3>Tokens &amp; cost per day</h3>
+            <div class="metric-seg" id="metricSeg">${Object.values(METRICS).map((m) =>
+              `<button data-metric="${m.key}" aria-pressed="${state.metric === m.key}"><span class="ms-dot" style="background:${m.hex}"></span>${m.key === 'cost' ? 'Est. cost' : m.label.replace(' tokens', '')}</button>`).join('')}</div>
+          </div>
+          ${metricChart(u.daily, state.metric)}
+        </div>
+      </div>
+      <div class="viz-grid-2">
+        <div class="viz-card">
+          <div class="viz-card-h"><h3>Model usage</h3><span class="vh-sub">est. cost</span></div>
+          ${modelBars(u.byModel)}
+        </div>
+        <div class="viz-card">
+          <div class="viz-card-h"><h3>Top projects by time</h3><span class="vh-sub">active hours</span></div>
+          ${projectBars(u.byProject)}
+        </div>
+      </div>
+      <div class="viz-grid-2">
+        <div class="viz-card wide">
+          <div class="viz-card-h"><h3>When you code</h3><span class="vh-sub">activity by hour of day (local)</span></div>
+          ${hourHist(u.hourHistogram)}
+        </div>
+      </div>`;
+
+    elInsights.innerHTML = `<div class="insights">${head}${stats}${charts}${insightCards(u.insights)}</div>`;
+    wireInsights();
+  }
+
+  function todayStr() {
+    const d = new Date();
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+  }
+
+  // --- time-per-day / week bar chart (SVG) ---
+  function timeBarChart(daily) {
+    let rows = daily.map((d) => ({ label: d.date, sec: d.activeSeconds }));
+    const weekly = daily.length > 60;
+    if (weekly) {
+      const map = new Map();
+      for (const d of daily) {
+        const wk = weekKey(d.date);
+        map.set(wk, (map.get(wk) || 0) + d.activeSeconds);
+      }
+      rows = Array.from(map, ([label, sec]) => ({ label, sec }));
+    }
+    return svgBars(rows.map((r) => ({
+      label: r.label,
+      value: r.sec / 3600,
+      tv: fmtDuration(r.sec),
+      tl: prettyDate(r.label) + (weekly ? ' (week)' : ''),
+    })), { unit: 'h', cls: 'time', fmtY: (v) => (v >= 10 ? v.toFixed(0) : v.toFixed(1)) });
+  }
+
+  // --- metric-switchable daily chart ---
+  function metricChart(daily, metricKey) {
+    const m = METRICS[metricKey];
+    const rows = daily.map((d) => {
+      const val = m.kind === 'cost' ? d.cost : d.tokens[m.key];
+      return {
+        label: d.date,
+        value: val,
+        tv: m.kind === 'cost' ? fmtCost(val) : fmtTokens(val),
+        tl: prettyDate(d.date),
+      };
+    });
+    return svgBars(rows, {
+      color: m.color,
+      fmtY: m.kind === 'cost' ? (v) => (v >= 1 ? '$' + Math.round(v) : '$' + v.toFixed(2)) : fmtTokens,
+    });
+  }
+
+  // Generic SVG bar chart. opts: {color, cls, fmtY, unit}
+  function svgBars(rows, opts) {
+    opts = opts || {};
+    const W = 900, H = 240, padL = 46, padR = 12, padT = 12, padB = 30;
+    const iw = W - padL - padR, ih = H - padT - padB;
+    const max = Math.max(1, ...rows.map((r) => r.value));
+    const n = rows.length;
+    const slot = iw / n;
+    const bw = Math.min(24, Math.max(2, slot - 4));
+    // y gridlines (4)
+    const ticks = niceTicks(max, 4);
+    let grid = '';
+    for (const tk of ticks) {
+      const y = padT + ih - (tk / max) * ih;
+      grid += `<line class="grid-line" x1="${padL}" y1="${y.toFixed(1)}" x2="${W - padR}" y2="${y.toFixed(1)}"/>`;
+      grid += `<text class="tick-txt tnum" x="${padL - 6}" y="${(y + 3).toFixed(1)}" text-anchor="end">${esc(opts.fmtY ? opts.fmtY(tk) : String(tk))}</text>`;
+    }
+    let bars = '';
+    const labelEvery = Math.ceil(n / 12);
+    rows.forEach((r, i) => {
+      const x = padL + i * slot + (slot - bw) / 2;
+      const h = (r.value / max) * ih;
+      const y = padT + ih - h;
+      const fill = opts.cls ? '' : ` style="fill:${opts.color || 'var(--viz-output)'}"`;
+      const clsAttr = 'bar' + (opts.cls ? ' ' + opts.cls : '');
+      bars += `<rect class="${clsAttr}"${fill} x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${bw.toFixed(1)}" height="${Math.max(0.5, h).toFixed(1)}" rx="3" data-tv="${esc(r.tv)}" data-tl="${esc(r.tl)}"/>`;
+      if (i % labelEvery === 0) {
+        bars += `<text class="bar-lbl" x="${(x + bw / 2).toFixed(1)}" y="${H - padB + 14}" text-anchor="middle">${esc(shortDate(r.label))}</text>`;
+      }
+    });
+    const base = padT + ih;
+    return `<svg class="viz-svg" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img">
+      ${grid}
+      <line class="axis-line" x1="${padL}" y1="${base}" x2="${W - padR}" y2="${base}"/>
+      ${bars}
+    </svg>`;
+  }
+
+  // --- model usage horizontal bars ---
+  function modelBars(byModel) {
+    if (!byModel.length) return '<div class="usage-empty">No model usage in range.</div>';
+    const top = byModel.slice(0, 8);
+    const max = Math.max(...top.map((m) => m.cost), 0.0001);
+    const legend = uniqueTiers(top);
+    const bars = top.map((m) => {
+      const col = tierColor(m.model);
+      const pct = Math.max(2, (m.cost / max) * 100);
+      const tok = m.input + m.output + m.cacheRead + m.cacheWrite;
+      return `<div class="mbar">
+        <span class="mb-name" title="${esc(m.model)}"><span class="dot" style="background:${col}"></span>${esc(shortModel(m.model) || m.model)}</span>
+        <span class="mb-track"><span class="mb-fill" style="width:${pct}%;background:${col}" data-tv="${esc(fmtCost(m.cost))}" data-tl="${esc(shortModel(m.model))} · ${esc(fmtTokens(tok))} tokens · ${m.count} msgs"></span></span>
+        <span class="mb-val">${esc(fmtCost(m.cost))}<span class="mb-sub">${esc(fmtTokens(tok))}</span></span>
+      </div>`;
+    }).join('');
+    return `<div class="mbars">${bars}</div>
+      <div class="viz-legend">${legend.map((ti) => `<span class="lg"><span class="lg-key" style="background:${TIER_COLOR[ti]}"></span>${ti}</span>`).join('')}</div>`;
+  }
+  function uniqueTiers(models) {
+    const set = [];
+    for (const m of models) { const t = modelTier(m.model); if (set.indexOf(t) === -1) set.push(t); }
+    return set;
+  }
+
+  // --- top projects by time ---
+  function projectBars(byProject) {
+    if (!byProject.length) return '<div class="usage-empty">No project activity in range.</div>';
+    const top = byProject.slice(0, 8);
+    const max = Math.max(...top.map((p) => p.activeSeconds), 1);
+    const bars = top.map((p) => {
+      const col = projColor(p.project);
+      const pct = Math.max(2, (p.activeSeconds / max) * 100);
+      return `<div class="mbar">
+        <span class="mb-name" title="${esc(p.project)}"><span class="dot" style="background:${col};border-radius:50%"></span>${esc(p.project)}</span>
+        <span class="mb-track"><span class="mb-fill" style="width:${pct}%;background:${col}" data-tv="${esc(fmtDuration(p.activeSeconds))}" data-tl="${esc(p.project)} · ${esc(fmtCost(p.cost))} · ${p.sessions} sessions"></span></span>
+        <span class="mb-val">${esc(fmtDuration(p.activeSeconds))}<span class="mb-sub">${esc(fmtCost(p.cost))}</span></span>
+      </div>`;
+    }).join('');
+    return `<div class="mbars">${bars}</div>`;
+  }
+
+  // --- hour-of-day histogram ---
+  function hourHist(hours) {
+    const max = Math.max(...hours, 1);
+    const cols = hours.map((c, h) => {
+      const pct = (c / max) * 100;
+      return `<div class="hh-col" data-tv="${c} events" data-tl="${String(h).padStart(2, '0')}:00–${String(h).padStart(2, '0')}:59">
+        <div class="hh-bar" style="height:${Math.max(2, pct)}%"></div></div>`;
+    }).join('');
+    const axis = hours.map((_, h) => (h % 3 === 0 ? `<div class="hh-tick">${h}</div>` : '<div class="hh-tick"></div>')).join('');
+    return `<div class="hourhist">${cols}</div><div class="hh-axis">${axis}</div>`;
+  }
+
+  // --- efficiency insight cards ---
+  function insightCards(ins) {
+    if (!ins) return '';
+    const hit = ins.cacheHitRate * 100;
+    const hitStr = hit >= 99.95 ? '~100%' : hit.toFixed(1) + '%';
+    const hitNote = hit >= 90 ? 'Excellent — prompt caching is saving you ' + fmtCost(ins.cacheSavings) + ' (API-equivalent).'
+      : hit >= 60 ? 'Solid cache reuse. Longer, stable prompts cache better.'
+        : 'Low reuse — shorter-lived context this range.';
+    const mix = ins.modelMix || { tiers: {}, total: 0 };
+    const mixEntries = Object.entries(mix.tiers).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1]);
+    const topTier = mixEntries[0];
+    const topPct = topTier && mix.total ? (topTier[1] / mix.total) * 100 : 0;
+    const mixNote = mixEntries.map(([t, v]) => t + ' ' + Math.round((v / (mix.total || 1)) * 100) + '%').join(' · ')
+      + (topPct > 80 ? ` — heavily on ${topTier[0]}, your priciest tier.` : '');
+    const longest = ins.longestSession, exp = ins.mostExpensiveSession;
+
+    const cards = [];
+    cards.push(card('database', 'Cache hit rate', hitStr, hitNote));
+    cards.push(card('gauge', 'Cost per active hour', fmtCost(ins.costPerActiveHour), 'What an hour of shipping costs in API-equivalent tokens.'));
+    cards.push(card('cpu', 'Model mix', topTier ? Math.round(topPct) + '% ' + topTier[0] : '—', mixNote || 'No output tokens in range.'));
+    if (longest || exp) {
+      const parts = [];
+      if (longest) parts.push(`<button class="ic-link" data-goto="${esc(longest.id)}">${esc(longest.title)}</button> — ${esc(fmtDuration(longest.seconds))}`);
+      if (exp) parts.push(`<button class="ic-link" data-goto="${esc(exp.id)}">${esc(exp.title)}</button> — ${esc(fmtCost(exp.cost))}`);
+      cards.push(`<div class="ins-card"><div class="ic-ico"><span>${icon('trophy')}</span></div><div>
+        <div class="ic-title">Standout sessions</div>
+        <div class="ic-note" style="margin-top:6px">Longest: ${parts[0] || '—'}<br>Most expensive: ${parts[1] || '—'}</div></div></div>`);
+    }
+    return `<div class="ins-cards">${cards.join('')}</div>`;
+    function card(ic, title, big, note) {
+      return `<div class="ins-card"><div class="ic-ico"><span>${icon(ic)}</span></div><div>
+        <div class="ic-title">${esc(title)}</div><div class="ic-big">${esc(big)}</div><div class="ic-note">${esc(note)}</div></div></div>`;
+    }
+  }
+
+  function wireInsights() {
+    hydrateIcons(elInsights);
+    wireTips(elInsights);
+    const seg = $('#rangeSeg', elInsights);
+    if (seg) seg.addEventListener('click', (e) => {
+      const b = e.target.closest('button'); if (!b) return;
+      state.range.preset = b.dataset.range;
+      loadUsage();
+    });
+    const ms = $('#metricSeg', elInsights);
+    if (ms) ms.addEventListener('click', (e) => {
+      const b = e.target.closest('button'); if (!b) return;
+      state.metric = b.dataset.metric;
+      renderInsights(); // client-side, no refetch
+    });
+    ['rangeFrom', 'rangeTo'].forEach((id) => {
+      const el = $('#' + id, elInsights);
+      if (el) el.addEventListener('change', () => {
+        state.range.from = $('#rangeFrom', elInsights).value || null;
+        state.range.to = $('#rangeTo', elInsights).value || null;
+        if (state.range.from && state.range.to) { state.range.preset = 'custom'; loadUsage(); }
+      });
+    });
+    elInsights.querySelectorAll('.ic-link[data-goto]').forEach((b) =>
+      b.addEventListener('click', () => { setView('sessions'); selectSession(b.dataset.goto); }));
+  }
+
+  // date helpers for charts
+  function prettyDate(iso) {
+    const d = new Date(iso + 'T00:00:00');
+    if (isNaN(d)) return iso;
+    return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+  }
+  function shortDate(iso) {
+    const d = new Date(iso + 'T00:00:00');
+    if (isNaN(d)) return iso;
+    return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  }
+  function weekKey(iso) {
+    const d = new Date(iso + 'T00:00:00');
+    const day = (d.getDay() + 6) % 7; // Monday = 0
+    d.setDate(d.getDate() - day);
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+  }
+  function niceTicks(max, count) {
+    const step = niceNum(max / count, true);
+    const ticks = [];
+    for (let v = step; v <= max + 1e-9; v += step) ticks.push(+v.toFixed(6));
+    return ticks;
+  }
+  function niceNum(range, round) {
+    const exp = Math.floor(Math.log10(range));
+    const frac = range / Math.pow(10, exp);
+    let nf;
+    if (round) nf = frac < 1.5 ? 1 : frac < 3 ? 2 : frac < 7 ? 5 : 10;
+    else nf = frac <= 1 ? 1 : frac <= 2 ? 2 : frac <= 5 ? 5 : 10;
+    return nf * Math.pow(10, exp);
+  }
+
+  // =========================================================================
+  // DEEP transcript search
+  // =========================================================================
+  function setDeepMode(on) {
+    state.deepMode = on;
+    $('.search-wrap').dataset.deep = String(on);
+    elDeepToggle.setAttribute('aria-pressed', String(on));
+    elSearch.placeholder = on ? 'Search inside conversations…  (min 3 chars)' : 'Search sessions…  ( / )';
+    state.deepResults = null;
+    if (on) {
+      if (state.search.trim().length >= 3) runDeepSearch();
+      else renderList();
+    } else {
+      renderList();
+    }
+  }
+  let deepTimer = null;
+  function scheduleDeepSearch() {
+    clearTimeout(deepTimer);
+    const q = state.search.trim();
+    if (q.length < 3) { state.deepResults = null; state.deepLoading = false; renderList(); return; }
+    state.deepLoading = true;
+    renderList();
+    deepTimer = setTimeout(runDeepSearch, 260);
+  }
+  async function runDeepSearch() {
+    const q = state.search.trim();
+    if (q.length < 3) return;
+    const seq = ++state.deepSeq;
+    state.deepLoading = true;
+    try {
+      const r = await fetch('/api/search?q=' + encodeURIComponent(q), { cache: 'no-store' });
+      const data = await r.json();
+      if (seq !== state.deepSeq) return; // superseded
+      state.deepResults = data;
+      state.deepLoading = false;
+      renderList();
+    } catch (e) {
+      if (seq !== state.deepSeq) return;
+      state.deepLoading = false;
+      state.deepResults = { results: [], truncated: false };
+      renderList();
+    }
+  }
+  function highlight(text, q) {
+    const out = esc(text);
+    if (!q) return out;
+    const idx = text.toLowerCase().indexOf(q.toLowerCase());
+    if (idx === -1) return out;
+    // rebuild with <mark> using escaped fragments
+    let res = '';
+    const lower = text.toLowerCase(), ql = q.toLowerCase();
+    let i = 0;
+    while (i < text.length) {
+      const hit = lower.indexOf(ql, i);
+      if (hit === -1) { res += esc(text.slice(i)); break; }
+      res += esc(text.slice(i, hit)) + '<mark>' + esc(text.slice(hit, hit + q.length)) + '</mark>';
+      i = hit + q.length;
+    }
+    return res;
+  }
+  function renderDeepResults() {
+    const q = state.search.trim();
+    elListContext.innerHTML = `<b>Deep search</b> · inside conversations`;
+    if (state.deepLoading && !state.deepResults) {
+      elSessionRows.hidden = true; elListEmpty.hidden = true;
+      elSkeleton.hidden = false;
+      elSkeleton.innerHTML = '<div class="deep-loading"><span class="spinner"></span>Scanning transcripts for “' + esc(q) + '”…</div>';
+      return;
+    }
+    elSkeleton.hidden = true;
+    const data = state.deepResults || { results: [] };
+    if (!data.results.length) {
+      elSessionRows.hidden = true;
+      elListEmpty.hidden = false;
+      elListEmpty.innerHTML = `<span class="empty-ico">${icon('scan')}</span>
+        <div class="empty-title">No matches in conversations</div>
+        <div class="empty-sub">Nothing containing “${esc(q)}” in any transcript body.</div>`;
+      return;
+    }
+    // group by session, preserve order
+    const groups = [];
+    const map = new Map();
+    for (const r of data.results) {
+      let g = map.get(r.sessionId);
+      if (!g) { g = { sessionId: r.sessionId, title: r.sessionTitle, project: r.projectName, hits: [] }; map.set(r.sessionId, g); groups.push(g); }
+      g.hits.push(r);
+    }
+    elListEmpty.hidden = true;
+    elSessionRows.hidden = false;
+    const count = data.results.length;
+    let html = `<div class="deep-head"><b>${count}${data.truncated ? '+' : ''}</b> match${count === 1 ? '' : 'es'} in <b>${groups.length}</b> session${groups.length === 1 ? '' : 's'}</div>`;
+    for (const g of groups) {
+      const col = projColor(g.project);
+      html += `<div class="deep-group">
+        <button class="deep-session" data-id="${esc(g.sessionId)}">
+          <span class="dot" style="background:${col}"></span>
+          <span class="ds-title">${esc(g.title)}</span>
+          <span class="ds-proj">${esc(g.project)}</span>
+          <span class="ds-count tnum">${g.hits.length}</span>
+        </button>`;
+      for (const h of g.hits) {
+        html += `<button class="deep-hit" data-id="${esc(g.sessionId)}">
+          <span class="dh-role ${h.role}">${h.role === 'user' ? 'You' : 'Claude'}</span>
+          <span class="dh-snip">${highlight(h.snippet, q)}</span>
+        </button>`;
+      }
+      html += `</div>`;
+    }
+    elSessionRows.innerHTML = html;
+  }
+
+  // =========================================================================
+  // PROJECT JOURNAL
+  // =========================================================================
+  function openJournal(project) {
+    state.journalProject = project;
+    setView('sessions');
+    hideDetailPanes();
+    elJournal.hidden = false;
+    app.dataset.detailOpen = 'true';
+    renderJournal();
+    elJournal.parentElement.scrollTop = 0;
+  }
+  function journalEntries(project) {
+    return state.sessions
+      .filter((s) => (s.projectName || s.projectKey) === project)
+      .slice()
+      .sort((a, b) => (Date.parse(a.createdAt || a.lastActivityAt) || 0) - (Date.parse(b.createdAt || b.lastActivityAt) || 0));
+  }
+  function renderJournal() {
+    const project = state.journalProject;
+    const entries = journalEntries(project);
+    const col = projColor(project);
+    const totalCost = entries.reduce((a, s) => a + (s.usage ? s.usage.cost : 0), 0);
+    const totalSec = entries.reduce((a, s) => a + (s.usage ? s.usage.activeSeconds : 0), 0);
+
+    let body = '';
+    let curMonth = '';
+    for (const s of entries) {
+      const d = new Date(s.createdAt || s.lastActivityAt);
+      const monthKey = isNaN(d) ? 'Undated' : d.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+      if (monthKey !== curMonth) { curMonth = monthKey; body += `<div class="jr-month">${esc(monthKey)}</div>`; }
+      body += journalEntryHTML(s);
+    }
+
+    elJournal.innerHTML = `
+      <div class="jr-head">
+        <div>
+          <h1 class="jr-title"><span class="dot" style="background:${col}"></span>${esc(project)}</h1>
+          <div class="jr-sub">${entries.length} session${entries.length === 1 ? '' : 's'} · ${esc(fmtDuration(totalSec))} active · ${esc(fmtCost(totalCost))} est.</div>
+        </div>
+        <div class="jr-actions">
+          <button class="jr-back" id="journalBack">${icon('arrowLeft')} Back</button>
+          <button class="btn btn-ghost" id="journalCopy">${icon('copy')} Copy Markdown</button>
+          <button class="btn btn-primary" id="journalDownload">${icon('download')} Download Markdown</button>
+        </div>
+      </div>
+      ${entries.length ? body : '<div class="ins-empty">No sessions in this project yet.</div>'}`;
+    hydrateIcons(elJournal);
+    $('#journalBack').addEventListener('click', () => { hideDetailPanes(); showOverview(); });
+    $('#journalCopy').addEventListener('click', (e) => copyText(buildJournalMarkdown(project, entries), e.currentTarget, 'Journal copied'));
+    $('#journalDownload').addEventListener('click', () => downloadMarkdown(project, entries));
+    elJournal.querySelectorAll('.je-title, .je-open').forEach((el) =>
+      el.addEventListener('click', () => { hideDetailPanes(); selectSession(el.dataset.id); }));
+  }
+  function journalEntryHTML(s) {
+    const d = new Date(s.createdAt || s.lastActivityAt);
+    const dateStr = isNaN(d) ? '' : d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) + ' · ' + d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+    const dur = s.usage ? fmtDuration(s.usage.activeSeconds) : null;
+    const cost = s.usage ? fmtCost(s.usage.cost) : null;
+    const pills = [];
+    if (dur) pills.push(`<span class="je-pill">${icon('clock')}${esc(dur)}</span>`);
+    pills.push(`<span class="je-pill">${icon('message')}${s.userMessageCount} prompts</span>`);
+    if (cost) pills.push(`<span class="je-pill">${esc(cost)}</span>`);
+    if (s.customTitle) pills.push('<span class="je-pill named">Named</span>');
+    const body = summaryLead(s) || s.firstPrompt || 'No summary or prompt captured.';
+    return `<div class="jr-entry">
+      <div class="je-date tnum">${esc(dateStr)}</div>
+      <div class="je-title" data-id="${esc(s.sessionId)}">${esc(s.title)}</div>
+      <div class="jr-pills">${pills.join('')}</div>
+      <div class="je-body">${esc(body)}</div>
+    </div>`;
+  }
+  function buildJournalMarkdown(project, entries) {
+    let md = '# ' + project + ' — Claude Code Journal\n\n';
+    for (const s of entries) {
+      const d = new Date(s.createdAt || s.lastActivityAt);
+      const date = isNaN(d) ? '(undated)' : d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+      const bits = [];
+      if (s.usage) bits.push(fmtDuration(s.usage.activeSeconds));
+      bits.push(s.userMessageCount + ' prompts');
+      if (s.usage) bits.push('~' + fmtCost(s.usage.cost));
+      md += '## ' + date + ' — ' + s.title + ' (' + bits.join(', ') + ')\n';
+      const body = (s.summary && s.summary.text) ? s.summary.text : (s.firstPrompt || '');
+      if (body) md += body.trim() + '\n';
+      md += '\n';
+    }
+    return md;
+  }
+  function downloadMarkdown(project, entries) {
+    const md = buildJournalMarkdown(project, entries);
+    const blob = new Blob([md], { type: 'text/markdown;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = project.replace(/[^A-Za-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '') + '-journal.md';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    status('Journal downloaded', 'ok');
+  }
+
+  // =========================================================================
+  // View management
+  // =========================================================================
+  function hideDetailPanes() { elOverview.hidden = true; elDetail.hidden = true; elJournal.hidden = true; }
+  function setView(view) {
+    state.view = view;
+    app.dataset.view = view;
+    elInsights.hidden = view !== 'insights';
+    if (view === 'insights') {
+      $$('.nav-item[data-filter]').forEach((n) => (n.dataset.active = 'false'));
+      $$('.project-item').forEach((n) => (n.dataset.active = 'false'));
+      if (!state.usage) loadUsage(); else { renderInsights(); loadUsage(); }
+    }
+  }
+
   // ---- filters / nav ----
   function setFilter(filter, project) {
+    state.view = 'sessions';
+    app.dataset.view = 'sessions';
+    elInsights.hidden = true;
     state.filter = filter;
     state.project = project || null;
-    $$('.nav-item').forEach((n) => (n.dataset.active = String(n.dataset.filter === filter && filter !== 'project')));
+    $$('.nav-item[data-filter]').forEach((n) => (n.dataset.active = String(n.dataset.filter === filter && filter !== 'project')));
+    updateJournalBtn();
     renderSidebar();
     renderList();
+  }
+  function updateJournalBtn() {
+    const show = state.filter === 'project' && !!state.project;
+    elJournalBtn.hidden = !show;
   }
 
   // ---- theme ----
@@ -607,6 +1460,7 @@
 
   // ---- keyboard ----
   function moveSelection(dir) {
+    if (state.deepMode) return; // deep-search list isn't arrow-navigable
     const list = currentList();
     if (!list.length) return;
     let idx = list.findIndex((s) => s.sessionId === state.selectedId);
@@ -617,24 +1471,33 @@
 
   // ---- events ----
   function bind() {
-    $$('.nav-item').forEach((n) => n.addEventListener('click', () => setFilter(n.dataset.filter)));
+    $$('.nav-item[data-filter]').forEach((n) => n.addEventListener('click', () => setFilter(n.dataset.filter)));
+    $('.nav-insights').addEventListener('click', () => setView('insights'));
     elProjectList.addEventListener('click', (e) => {
       const b = e.target.closest('.project-item'); if (b) setFilter('project', b.dataset.proj);
     });
     elSessionRows.addEventListener('click', (e) => {
-      const b = e.target.closest('.srow'); if (b) selectSession(b.dataset.id);
+      const b = e.target.closest('[data-id]'); if (b) selectSession(b.dataset.id);
     });
     elOverview.addEventListener('click', (e) => {
       const rec = e.target.closest('.recent-item'); if (rec) { selectSession(rec.dataset.id); return; }
       const bar = e.target.closest('.bar-row'); if (bar) setFilter('project', bar.dataset.proj);
     });
 
+    elDeepToggle.addEventListener('click', () => setDeepMode(!state.deepMode));
+    elJournalBtn.addEventListener('click', () => { if (state.project) openJournal(state.project); });
+
     elSearch.addEventListener('input', () => {
       state.search = elSearch.value;
       elSearchClear.hidden = !elSearch.value;
-      renderList();
+      if (state.deepMode) scheduleDeepSearch();
+      else renderList();
     });
-    elSearchClear.addEventListener('click', () => { elSearch.value = ''; state.search = ''; elSearchClear.hidden = true; renderList(); elSearch.focus(); });
+    elSearchClear.addEventListener('click', () => {
+      elSearch.value = ''; state.search = ''; elSearchClear.hidden = true;
+      state.deepResults = null;
+      renderList(); elSearch.focus();
+    });
 
     $('#sortBtn').addEventListener('click', (e) => { e.stopPropagation(); elSortMenu.hidden = !elSortMenu.hidden; });
     elSortMenu.addEventListener('click', (e) => {
@@ -666,6 +1529,7 @@
       const typing = document.activeElement && (document.activeElement.tagName === 'INPUT' || document.activeElement.tagName === 'TEXTAREA');
       if (e.key === '/' && !typing) { e.preventDefault(); elSearch.focus(); elSearch.select(); return; }
       if (e.key === 'Escape') {
+        if (state.deepMode && (state.search || document.activeElement === elSearch)) { setDeepMode(false); elSearch.blur(); return; }
         if (typing) { elSearch.blur(); return; }
         if (app.dataset.detailOpen === 'true' && window.innerWidth <= 900) { showOverview(); return; }
       }

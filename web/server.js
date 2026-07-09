@@ -61,7 +61,50 @@ function appDataRoot() {
 const APP_DATA_DIR = path.join(appDataRoot(), 'claude-sessions');
 const SUMMARY_WORK_DIR = path.join(APP_DATA_DIR, 'summary-runs');
 const SUMMARIES_FILE = path.join(APP_DATA_DIR, 'summaries.json');
+const BRIEFS_FILE = path.join(APP_DATA_DIR, 'briefs.json');
 const RESUME_DIR = path.join(APP_DATA_DIR, 'resume');
+
+// ---------------------------------------------------------------------------
+// Usage / cost model (see analytics spec — must match the macOS implementation)
+// ---------------------------------------------------------------------------
+
+// Pricing table, USD per million tokens: [prefix, input, output, cacheRead, cacheWrite].
+// Matched by model-id PREFIX, first match wins (order matters).
+const PRICING = [
+  ['claude-fable-5', 10.0, 50.0, 1.00, 12.50],
+  ['claude-mythos',  10.0, 50.0, 1.00, 12.50],
+  ['claude-opus-4-1', 15.0, 75.0, 1.50, 18.75],
+  ['claude-opus-4-0', 15.0, 75.0, 1.50, 18.75],
+  ['claude-opus',      5.0, 25.0, 0.50,  6.25],
+  ['claude-sonnet',    3.0, 15.0, 0.30,  3.75],
+  ['claude-haiku',     1.0,  5.0, 0.10,  1.25],
+];
+const FALLBACK_PRICE = [3.0, 15.0, 0.30, 3.75]; // unknown models
+
+function rateFor(model) {
+  const m = model || '';
+  for (const r of PRICING) if (m.indexOf(r[0]) === 0) return r;
+  return ['(other)', FALLBACK_PRICE[0], FALLBACK_PRICE[1], FALLBACK_PRICE[2], FALLBACK_PRICE[3]];
+}
+
+// Coarse tier for the "model mix" insight.
+function modelTier(model) {
+  const m = model || '';
+  if (m.indexOf('claude-fable') === 0 || m.indexOf('claude-mythos') === 0) return 'Fable';
+  if (m.indexOf('claude-opus') === 0) return 'Opus';
+  if (m.indexOf('claude-sonnet') === 0) return 'Sonnet';
+  if (m.indexOf('claude-haiku') === 0) return 'Haiku';
+  return 'Other';
+}
+
+// Local-timezone day key (YYYY-MM-DD). Server + native app share a machine/tz,
+// so day attribution matches. String order == chronological order.
+function localDayKey(epoch) {
+  const d = new Date(epoch);
+  const mo = String(d.getMonth() + 1).padStart(2, '0');
+  const da = String(d.getDate()).padStart(2, '0');
+  return d.getFullYear() + '-' + mo + '-' + da;
+}
 
 function ensureDir(dir) {
   try { fs.mkdirSync(dir, { recursive: true }); } catch (_) { /* ignore */ }
@@ -84,9 +127,10 @@ const EXCLUDED_PROJECT_KEYS = new Set([
 // In-memory cache: filePath -> { mtimeMs, size, meta }
 // ---------------------------------------------------------------------------
 
-const metaCache = new Map();      // filePath -> { mtimeMs, size, meta }
+const metaCache = new Map();      // filePath -> { mtimeMs, size, meta }  (meta.usage carries analytics)
 const sessionIndex = new Map();   // sessionId -> filePath
 let summaries = loadSummaries();  // sessionId -> { text, generatedAt }
+let briefs = loadBriefs();        // sessionId -> { state, open, nextPrompt, generatedAt, sessionLastActivity }
 let hasScannedOnce = false;
 
 function loadSummaries() {
@@ -105,6 +149,24 @@ function saveSummaries() {
     fs.writeFileSync(SUMMARIES_FILE, JSON.stringify(summaries, null, 2));
   } catch (e) {
     console.error('[claude-sessions] Failed to persist summaries:', e.message);
+  }
+}
+
+function loadBriefs() {
+  try {
+    const obj = JSON.parse(fs.readFileSync(BRIEFS_FILE, 'utf8'));
+    return obj && typeof obj === 'object' ? obj : {};
+  } catch (_) {
+    return {};
+  }
+}
+
+function saveBriefs() {
+  ensureDir(APP_DATA_DIR);
+  try {
+    fs.writeFileSync(BRIEFS_FILE, JSON.stringify(briefs, null, 2));
+  } catch (e) {
+    console.error('[claude-sessions] Failed to persist briefs:', e.message);
   }
 }
 
@@ -262,6 +324,18 @@ async function parseTranscript(entry) {
   let firstTimestamp = null;
   let lastTimestamp = null;
 
+  // --- usage / analytics accumulators (dedup by message.id, INCLUDE sidechains) ---
+  const stamps = [];                 // epoch ms of every timestamped line (heartbeat)
+  const seenUsage = new Set();       // message.id / requestId dedup
+  const days = new Map();            // dayKey -> per-day aggregate bucket
+  const byModelAll = new Map();      // model -> all-time aggregate for this session
+  const uTotals = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, activeSeconds: 0, savings: 0 };
+  function dayBucket(key) {
+    let b = days.get(key);
+    if (!b) { b = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, active: 0, savings: 0, hours: {}, models: {} }; days.set(key, b); }
+    return b;
+  }
+
   let lineStart = 0;
   const len = content.length;
   for (let idx = 0; idx <= len; idx++) {
@@ -275,7 +349,48 @@ async function parseTranscript(entry) {
       if (ts) {
         if (firstTimestamp === null) firstTimestamp = ts;
         lastTimestamp = ts;
+        const e = Date.parse(ts);
+        if (!Number.isNaN(e)) stamps.push(e);
       }
+    }
+
+    // Usage: any assistant line carrying a usage block (sidechains INCLUDED — the
+    // tokens were really spent). Deduped by message.id across streaming chunks.
+    if (line.indexOf('"usage"') !== -1 && line.indexOf('"type":"assistant"') !== -1) {
+      let uo = null;
+      try { uo = JSON.parse(line); } catch (_) { uo = null; }
+      const um = uo && uo.message;
+      const usage = um && um.usage;
+      if (usage) {
+        const uid = um.id || uo.requestId || line;
+        if (!seenUsage.has(uid)) {
+          seenUsage.add(uid);
+          const inp = usage.input_tokens || 0;
+          const out = usage.output_tokens || 0;
+          const cr = usage.cache_read_input_tokens || 0;
+          const cw = usage.cache_creation_input_tokens || 0;
+          const r = rateFor(um.model);
+          const cost = (inp * r[1] + out * r[2] + cr * r[3] + cw * r[4]) / 1e6;
+          const savings = (cr * (r[1] - r[3])) / 1e6; // vs paying full input rate
+          const te = typeof uo.timestamp === 'string' ? Date.parse(uo.timestamp) : NaN;
+          const epoch = Number.isNaN(te) ? mtimeMs : te;
+          const dk = localDayKey(epoch);
+          const hr = new Date(epoch).getHours();
+          const model = um.model || '(unknown)';
+          const b = dayBucket(dk);
+          b.input += inp; b.output += out; b.cacheRead += cr; b.cacheWrite += cw; b.cost += cost; b.savings += savings;
+          b.hours[hr] = (b.hours[hr] || 0) + 1;
+          let dm = b.models[model];
+          if (!dm) { dm = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, count: 0 }; b.models[model] = dm; }
+          dm.input += inp; dm.output += out; dm.cacheRead += cr; dm.cacheWrite += cw; dm.cost += cost; dm.count++;
+          let am = byModelAll.get(model);
+          if (!am) { am = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, count: 0 }; byModelAll.set(model, am); }
+          am.input += inp; am.output += out; am.cacheRead += cr; am.cacheWrite += cw; am.cost += cost; am.count++;
+          uTotals.input += inp; uTotals.output += out; uTotals.cacheRead += cr; uTotals.cacheWrite += cw;
+          uTotals.cost += cost; uTotals.savings += savings;
+        }
+      }
+      // fall through: the assistant-count branch below still runs for non-sidechain lines
     }
 
     if (line.indexOf('"type":"custom-title"') !== -1) {
@@ -318,7 +433,109 @@ async function parseTranscript(entry) {
 
   meta.createdAt = firstTimestamp;
   meta.lastActivityAt = lastTimestamp || new Date(mtimeMs).toISOString();
+
+  // Heartbeat active time: sum gaps <= 300s between consecutive timestamps,
+  // attributed to the earlier timestamp's day, plus a fixed 60s tail per session.
+  stamps.sort((a, b) => a - b);
+  for (let i = 1; i < stamps.length; i++) {
+    const g = (stamps[i] - stamps[i - 1]) / 1000;
+    if (g > 0 && g <= 300) {
+      dayBucket(localDayKey(stamps[i - 1])).active += g;
+      uTotals.activeSeconds += g;
+    }
+  }
+  if (stamps.length) {
+    dayBucket(localDayKey(stamps[stamps.length - 1])).active += 60;
+    uTotals.activeSeconds += 60;
+  }
+
+  meta.usage = {
+    totals: uTotals,
+    byModelAll: Array.from(byModelAll, ([model, v]) => Object.assign({ model }, v)).sort((a, b) => b.cost - a.cost),
+    days: Object.fromEntries(days),
+    firstMs: stamps.length ? stamps[0] : (firstTimestamp ? Date.parse(firstTimestamp) : null),
+    lastMs: stamps.length ? stamps[stamps.length - 1] : null,
+  };
   return meta;
+}
+
+// Aggregate cached per-session usage records over a local-day range (inclusive).
+// fromDay / toDay are 'YYYY-MM-DD' strings or null (open-ended). Returns the shape
+// consumed by GET /api/usage.
+function aggregateUsage(fromDay, toDay) {
+  const tokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+  let totalCost = 0, totalActive = 0, totalSavings = 0;
+  const dailyMap = new Map();
+  const modelMap = new Map();
+  const projMap = new Map();
+  const hours = new Array(24).fill(0);
+  let longest = null, expensive = null;
+
+  for (const cached of metaCache.values()) {
+    const meta = cached.meta;
+    const u = meta && meta.usage;
+    if (!u || !u.days) continue;
+    let sCost = 0, sActive = 0, touched = false;
+    for (const dk in u.days) {
+      if (fromDay && dk < fromDay) continue;
+      if (toDay && dk > toDay) continue;
+      const d = u.days[dk];
+      touched = true;
+      tokens.input += d.input; tokens.output += d.output; tokens.cacheRead += d.cacheRead; tokens.cacheWrite += d.cacheWrite;
+      totalCost += d.cost; totalActive += d.active; totalSavings += d.savings;
+      sCost += d.cost; sActive += d.active;
+
+      let dm = dailyMap.get(dk);
+      if (!dm) { dm = { date: dk, activeSeconds: 0, cost: 0, tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, sessions: new Set() }; dailyMap.set(dk, dm); }
+      dm.activeSeconds += d.active; dm.cost += d.cost;
+      dm.tokens.input += d.input; dm.tokens.output += d.output; dm.tokens.cacheRead += d.cacheRead; dm.tokens.cacheWrite += d.cacheWrite;
+      dm.sessions.add(meta.sessionId);
+
+      for (const h in d.hours) hours[+h] += d.hours[h];
+      for (const mk in d.models) {
+        const mm = d.models[mk];
+        let g = modelMap.get(mk);
+        if (!g) { g = { model: mk, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, count: 0 }; modelMap.set(mk, g); }
+        g.input += mm.input; g.output += mm.output; g.cacheRead += mm.cacheRead; g.cacheWrite += mm.cacheWrite; g.cost += mm.cost; g.count += mm.count;
+      }
+    }
+    if (touched) {
+      const proj = projectDisplayName(meta);
+      let pg = projMap.get(proj);
+      if (!pg) { pg = { project: proj, activeSeconds: 0, cost: 0, sessions: 0 }; projMap.set(proj, pg); }
+      pg.activeSeconds += sActive; pg.cost += sCost; pg.sessions++;
+      if (!longest || sActive > longest.seconds) longest = { id: meta.sessionId, title: displayTitle(meta), seconds: sActive };
+      if (!expensive || sCost > expensive.cost) expensive = { id: meta.sessionId, title: displayTitle(meta), cost: sCost };
+    }
+  }
+
+  const daily = Array.from(dailyMap.values())
+    .map((d) => ({ date: d.date, activeSeconds: d.activeSeconds, cost: d.cost, tokens: d.tokens, sessions: d.sessions.size }))
+    .sort((a, b) => (a.date < b.date ? -1 : 1));
+  const byModel = Array.from(modelMap.values()).sort((a, b) => b.cost - a.cost);
+  const byProject = Array.from(projMap.values()).sort((a, b) => b.activeSeconds - a.activeSeconds);
+
+  const cacheDenom = tokens.input + tokens.cacheRead;
+  const activeHours = totalActive / 3600;
+  const tierOut = {};
+  let tierTotal = 0;
+  for (const m of byModel) { const t = modelTier(m.model); tierOut[t] = (tierOut[t] || 0) + m.output; tierTotal += m.output; }
+
+  return {
+    totals: { activeSeconds: totalActive, cost: totalCost, tokens },
+    daily,
+    byModel,
+    byProject,
+    hourHistogram: hours,
+    insights: {
+      cacheHitRate: cacheDenom > 0 ? tokens.cacheRead / cacheDenom : 0,
+      cacheSavings: totalSavings,
+      costPerActiveHour: activeHours > 0 ? totalCost / activeHours : 0,
+      longestSession: longest,
+      mostExpensiveSession: expensive,
+      modelMix: { tiers: tierOut, total: tierTotal },
+    },
+  };
 }
 
 // Extract user + assistant text messages for the detail-pane preview.
@@ -505,6 +722,11 @@ function resumeCommandFor(meta) {
 
 function toApiSession(meta, active) {
   const stored = summaries[meta.sessionId];
+  const brief = briefs[meta.sessionId] || null;
+  const ut = meta.usage ? meta.usage.totals : null;
+  const usage = ut
+    ? { tokens: { input: ut.input, output: ut.output, cacheRead: ut.cacheRead, cacheWrite: ut.cacheWrite }, cost: ut.cost, activeSeconds: ut.activeSeconds }
+    : null;
   return {
     sessionId: meta.sessionId,
     projectKey: meta.projectKey,
@@ -524,6 +746,10 @@ function toApiSession(meta, active) {
     fileSize: meta.fileSize,
     running: active.has(meta.sessionId),
     summary: stored ? { text: stored.text, generatedAt: stored.generatedAt } : null,
+    usage,
+    brief: brief
+      ? { state: brief.state, open: brief.open || [], nextPrompt: brief.nextPrompt, generatedAt: brief.generatedAt, sessionLastActivity: brief.sessionLastActivity || null }
+      : null,
     resumeCommand: resumeCommandFor(meta),
   };
 }
@@ -631,25 +857,21 @@ async function buildExcerpt(meta) {
   return parts.join('\n');
 }
 
-async function generateSummary(meta) {
+// Shared `claude -p` runner: resolves the CLI, pipes the excerpt on stdin, and
+// returns the trimmed stdout. Used by both summaries and pickup briefs so their
+// discovery / cwd / timeout behaviour is identical.
+async function runClaude(instruction, excerpt) {
   const claude = await resolveClaudePath();
   if (!claude) {
     const err = new Error('Could not find the `claude` CLI on your PATH.');
     err.code = 'CLAUDE_NOT_FOUND';
     throw err;
   }
-  const excerpt = await buildExcerpt(meta);
-  if (!excerpt) {
-    const err = new Error('This session has no conversation content to summarize.');
-    err.code = 'EMPTY_TRANSCRIPT';
-    throw err;
-  }
-
   ensureDir(SUMMARY_WORK_DIR);
 
   return new Promise((resolve, reject) => {
     const env = Object.assign({}, process.env, { CLAUDE_CODE_DISABLE_AUTOUPDATE: '1' });
-    const child = spawn(claude, ['-p', SUMMARY_INSTRUCTION, '--model', 'haiku'], {
+    const child = spawn(claude, ['-p', instruction, '--model', 'haiku'], {
       cwd: SUMMARY_WORK_DIR,
       env,
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -701,6 +923,163 @@ async function generateSummary(meta) {
       child.stdin.end();
     } catch (_) { /* handled by 'error' */ }
   });
+}
+
+async function generateSummary(meta) {
+  const excerpt = await buildExcerpt(meta);
+  if (!excerpt) {
+    const err = new Error('This session has no conversation content to summarize.');
+    err.code = 'EMPTY_TRANSCRIPT';
+    throw err;
+  }
+  return runClaude(SUMMARY_INSTRUCTION, excerpt);
+}
+
+// ---------------------------------------------------------------------------
+// Pickup Brief generation (hero continuity feature)
+// ---------------------------------------------------------------------------
+
+const BRIEF_INSTRUCTION =
+  'The stdin contains the tail of a Claude Code session transcript. Produce a pickup brief ' +
+  'for resuming this work, in exactly this format:\n' +
+  'STATE: 2-3 plain sentences on where the work stands (what was completed, what was in progress when the session ended).\n' +
+  "OPEN: up to 4 bullets (- ) of unresolved threads, known bugs, or explicitly deferred TODOs. Write 'none' if clean.\n" +
+  'NEXT PROMPT: a single ready-to-paste prompt (2-5 sentences, imperative, self-contained — assume the resumed ' +
+  'session has full prior context) that would continue the work most productively.';
+
+// Titles + first prompt + last 30 user/assistant messages (each truncated to
+// 500 chars) + file paths mentioned in the final assistant message. ~14KB cap.
+async function buildBriefExcerpt(meta) {
+  const messages = await extractPreview(meta.transcriptPath, 1000, 2000);
+  if (!messages.length) return '';
+
+  const parts = [];
+  parts.push('Project: ' + projectDisplayName(meta));
+  if (meta.customTitle) parts.push('Session name: ' + meta.customTitle);
+  if (meta.aiTitle) parts.push('Session title: ' + meta.aiTitle);
+  const first = messages.find((m) => m.role === 'user');
+  if (first) parts.push('First prompt: ' + first.text.slice(0, 500));
+
+  parts.push('--- LAST 30 MESSAGES ---');
+  for (const m of messages.slice(-30)) {
+    parts.push((m.role === 'user' ? 'USER: ' : 'ASSISTANT: ') + m.text.slice(0, 500));
+  }
+
+  let lastAssistant = null;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].role === 'assistant') { lastAssistant = messages[i]; break; }
+  }
+  if (lastAssistant) {
+    const paths = (lastAssistant.text.match(/[A-Za-z0-9_./~-]*\/[A-Za-z0-9_./~-]+\.[A-Za-z0-9]{1,6}/g) || [])
+      .concat(lastAssistant.text.match(/\b[A-Za-z0-9_-]+\.(?:swift|js|ts|tsx|jsx|py|go|rs|java|rb|css|html|json|md|sh|yml|yaml|c|cpp|h)\b/g) || []);
+    const uniq = Array.from(new Set(paths)).slice(0, 12);
+    if (uniq.length) parts.push('Files referenced: ' + uniq.join(', '));
+  }
+
+  let out = parts.join('\n');
+  if (out.length > 14000) out = out.slice(0, 14000);
+  return out;
+}
+
+// Split the model's response into STATE / OPEN / NEXT PROMPT sections.
+function parseBrief(raw) {
+  const markers = [['state', /STATE\s*:/i], ['open', /OPEN\s*:/i], ['next', /NEXT\s*PROMPT\s*:/i]];
+  const found = [];
+  for (const [key, re] of markers) { const m = raw.match(re); if (m) found.push({ key, start: m.index, after: m.index + m[0].length }); }
+  found.sort((a, b) => a.start - b.start);
+  const sec = {};
+  for (let i = 0; i < found.length; i++) {
+    const cur = found[i], next = found[i + 1];
+    sec[cur.key] = raw.slice(cur.after, next ? next.start : raw.length).trim();
+  }
+  const state = (sec.state || raw).trim();
+  let open = [];
+  if (sec.open) {
+    const t = sec.open.trim();
+    if (!/^none\.?$/i.test(t)) {
+      open = t.split('\n').map((l) => l.replace(/^[-*•]\s*/, '').trim()).filter(Boolean);
+    }
+  }
+  const nextPrompt = (sec.next || '').trim();
+  return { state, open, nextPrompt };
+}
+
+async function generateBrief(meta) {
+  const excerpt = await buildBriefExcerpt(meta);
+  if (!excerpt) {
+    const err = new Error('This session has no conversation content to brief from.');
+    err.code = 'EMPTY_TRANSCRIPT';
+    throw err;
+  }
+  const raw = await runClaude(BRIEF_INSTRUCTION, excerpt);
+  const parsed = parseBrief(raw);
+  parsed.raw = raw;
+  parsed.generatedAt = new Date().toISOString();
+  return parsed;
+}
+
+// ---------------------------------------------------------------------------
+// Deep transcript search (scans user/assistant text, stream-read, capped)
+// ---------------------------------------------------------------------------
+
+const readline = require('readline');
+
+async function deepSearch(q) {
+  const needle = q.toLowerCase();
+  const MAX_TOTAL = 200, MAX_PER = 8;
+  const listing = (await listTranscripts()).sort((a, b) => b.mtimeMs - a.mtimeMs);
+  const results = [];
+  let truncated = false;
+
+  for (const entry of listing) {
+    if (results.length >= MAX_TOTAL) { truncated = true; break; }
+    const cached = metaCache.get(entry.filePath);
+    const meta = cached ? cached.meta : null;
+    const title = meta ? displayTitle(meta) : entry.sessionId.slice(0, 8);
+    const project = meta ? projectDisplayName(meta) : entry.projectKey;
+    let perSession = 0;
+
+    await new Promise((resolve) => {
+      let done = false;
+      const finish = () => { if (!done) { done = true; resolve(); } };
+      const stream = fs.createReadStream(entry.filePath, { encoding: 'utf8' });
+      stream.on('error', finish);
+      const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
+      rl.on('line', (line) => {
+        if (perSession >= MAX_PER || results.length >= MAX_TOTAL) { rl.close(); return; }
+        if (!line) return;
+        if (line.indexOf('"isSidechain":true') !== -1) return;
+        const isUser = line.indexOf('"type":"user"') !== -1;
+        const isAssistant = line.indexOf('"type":"assistant"') !== -1;
+        if (!isUser && !isAssistant) return;
+        if (isUser && (line.indexOf('"isMeta":true') !== -1 || line.indexOf('"tool_result"') !== -1)) return;
+        if (line.toLowerCase().indexOf(needle) === -1) return; // cheap prefilter before JSON.parse
+        let obj; try { obj = JSON.parse(line); } catch (_) { return; }
+        const text = isUser ? userText(obj) : assistantText(obj);
+        if (!text) return;
+        if (isUser && !isRealPrompt(text)) return;
+        const mi = text.toLowerCase().indexOf(needle);
+        if (mi === -1) return;
+        const start = Math.max(0, mi - 120);
+        const end = Math.min(text.length, mi + needle.length + 120);
+        let snippet = text.slice(start, end).replace(/\s+/g, ' ').trim();
+        snippet = (start > 0 ? '…' : '') + snippet + (end < text.length ? '…' : '');
+        results.push({
+          sessionId: entry.sessionId,
+          sessionTitle: title,
+          projectName: project,
+          role: isUser ? 'user' : 'assistant',
+          snippet,
+          timestamp: typeof obj.timestamp === 'string' ? obj.timestamp : null,
+        });
+        perSession++;
+        if (perSession >= MAX_PER || results.length >= MAX_TOTAL) rl.close();
+      });
+      rl.on('close', finish);
+    });
+  }
+  if (results.length >= MAX_TOTAL) truncated = true;
+  return { results, truncated };
 }
 
 // ---------------------------------------------------------------------------
@@ -848,6 +1227,59 @@ const server = http.createServer(async (req, res) => {
     if (pathname === '/api/sessions' && method === 'GET') {
       const data = await scanSessions();
       return sendJson(res, 200, data);
+    }
+
+    if (pathname === '/api/usage' && method === 'GET') {
+      await scanSessions(); // ensure metaCache (and its usage records) are warm & fresh
+      const fromRaw = parsed.searchParams.get('from');
+      const toRaw = parsed.searchParams.get('to');
+      const fromMs = fromRaw ? Date.parse(fromRaw) : NaN;
+      const toMs = toRaw ? Date.parse(toRaw) : NaN;
+      const fromDay = Number.isNaN(fromMs) ? null : localDayKey(fromMs);
+      const toDay = Number.isNaN(toMs) ? null : localDayKey(toMs);
+      return sendJson(res, 200, aggregateUsage(fromDay, toDay));
+    }
+
+    if (pathname === '/api/search' && method === 'GET') {
+      const q = (parsed.searchParams.get('q') || '').trim();
+      if (q.length < 3) return sendJson(res, 200, { query: q, results: [], truncated: false });
+      await scanSessions(); // warm titles/projects for result grouping
+      const { results, truncated } = await deepSearch(q);
+      return sendJson(res, 200, { query: q, results, truncated });
+    }
+
+    const usageMatch = pathname.match(/^\/api\/sessions\/([^/]+)\/usage$/);
+    if (usageMatch && method === 'GET') {
+      const meta = await getSessionMeta(usageMatch[1]);
+      if (!meta) return sendJson(res, 404, { error: 'Session not found' });
+      const u = (meta.usage && meta.usage.totals) || { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, activeSeconds: 0 };
+      return sendJson(res, 200, {
+        tokens: { input: u.input || 0, output: u.output || 0, cacheRead: u.cacheRead || 0, cacheWrite: u.cacheWrite || 0 },
+        cost: u.cost || 0,
+        activeSeconds: u.activeSeconds || 0,
+        byModel: (meta.usage && meta.usage.byModelAll) || [],
+      });
+    }
+
+    const briefMatch = pathname.match(/^\/api\/sessions\/([^/]+)\/brief$/);
+    if (briefMatch && (method === 'POST' || method === 'GET')) {
+      const id = briefMatch[1];
+      if (method === 'GET') {
+        const b = briefs[id];
+        if (!b) return sendJson(res, 404, { error: 'No brief yet' });
+        return sendJson(res, 200, b);
+      }
+      const meta = await getSessionMeta(id);
+      if (!meta) return sendJson(res, 404, { error: 'Session not found' });
+      try {
+        const brief = await generateBrief(meta);
+        briefs[id] = Object.assign({}, brief, { sessionLastActivity: meta.lastActivityAt });
+        saveBriefs();
+        return sendJson(res, 200, briefs[id]);
+      } catch (e) {
+        console.error('[reprise] Brief failed:', e.message);
+        return sendJson(res, 500, { error: e.message, code: e.code || 'ERROR' });
+      }
     }
 
     const previewMatch = pathname.match(/^\/api\/sessions\/([^/]+)\/preview$/);
