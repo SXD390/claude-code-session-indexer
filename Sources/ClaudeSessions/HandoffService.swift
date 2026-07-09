@@ -287,12 +287,25 @@ enum HandoffService {
 
     /// PROGRESS.md: create fresh, or insert the new dated section directly after a leading
     /// "# " title (else at the very top), preserving everything below. Never deletes content.
+    ///
+    /// The on-disk merge is delegated to the pure `mergedProgress` below so the write and the UI
+    /// diff/copy previews compute the EXACT same bytes and can never diverge.
     static func writeProgress(dir: URL, projectName: String, section: String) throws -> URL {
         let url = dir.appendingPathComponent("PROGRESS.md")
+        let existing = try? String(contentsOf: url, encoding: .utf8)
+        let out = mergedProgress(existing: existing, projectName: projectName, section: section)
+        try out.write(to: url, atomically: true, encoding: .utf8)
+        return url
+    }
+
+    /// PURE (no file I/O): computes the resulting PROGRESS.md contents. `existing` is the current
+    /// on-disk text (nil / empty ⇒ create fresh). This is the single source of truth shared by the
+    /// writer, the diff preview, and the "Copy PROGRESS.md" action.
+    static func mergedProgress(existing: String?, projectName: String, section: String) -> String {
         let sectionTrimmed = section.trimmingCharacters(in: .whitespacesAndNewlines)
 
         var out: String
-        if let existing = try? String(contentsOf: url, encoding: .utf8), !existing.isEmpty {
+        if let existing = existing, !existing.isEmpty {
             let lines = existing.components(separatedBy: "\n")
             if let first = lines.first, first.hasPrefix("# ") {
                 // Keep the title line, insert the new section, then the rest (minus any
@@ -311,18 +324,29 @@ enum HandoffService {
         }
 
         if !out.hasSuffix("\n") { out += "\n" }
-        try out.write(to: url, atomically: true, encoding: .utf8)
-        return url
+        return out
     }
 
     /// CLAUDE.md: create with only the delimited block, or replace an existing marked block,
     /// or append a fresh block. Never overwrites the user's own content outside the markers.
+    ///
+    /// The on-disk merge is delegated to the pure `mergedClaude` below so the write and the UI
+    /// diff/copy previews compute the EXACT same bytes and can never diverge.
     static func writeClaudeMd(dir: URL, content: String) throws -> URL {
         let url = dir.appendingPathComponent("CLAUDE.md")
         let block = markerBlock(content: content)
+        let existing = try? String(contentsOf: url, encoding: .utf8)
+        let out = mergedClaude(existing: existing, block: block)
+        try out.write(to: url, atomically: true, encoding: .utf8)
+        return url
+    }
 
+    /// PURE (no file I/O): computes the resulting CLAUDE.md contents. `existing` is the current
+    /// on-disk text (nil / empty ⇒ create block-only); `block` is a fully-formed marker block from
+    /// `markerBlock(content:)`. Single source of truth for the writer, diff, and copy action.
+    static func mergedClaude(existing: String?, block: String) -> String {
         var out: String
-        if var existing = try? String(contentsOf: url, encoding: .utf8), !existing.isEmpty {
+        if var existing = existing, !existing.isEmpty {
             if let start = existing.range(of: claudeStartMarker),
                let end = existing.range(of: claudeEndMarker),
                start.lowerBound < end.lowerBound {
@@ -337,8 +361,7 @@ enum HandoffService {
         }
 
         if !out.hasSuffix("\n") { out += "\n" }
-        try out.write(to: url, atomically: true, encoding: .utf8)
-        return url
+        return out
     }
 
     static func markerBlock(content: String) -> String {
@@ -351,5 +374,62 @@ enum HandoffService {
             .replacingOccurrences(of: claudeEndMarker, with: "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return "\(claudeStartMarker)\n\(body)\n\(claudeEndMarker)"
+    }
+
+    // MARK: - Line diff (dependency-free)
+
+    /// One line of a unified diff. `.added` lines are what the merge introduces (a new dated
+    /// PROGRESS.md section or a fresh CLAUDE.md marker block); `.removed` lines are dropped from
+    /// the old file; `.context` lines are unchanged and shown (dimmed) for orientation.
+    struct DiffLine: Equatable {
+        enum Kind { case context, added, removed }
+        let kind: Kind
+        let text: String
+    }
+
+    /// PURE line-level diff of `old` → `new` via LCS. Emits an in-order sequence of context /
+    /// removed / added lines. The common Handoff case is a pure insertion (a new section or block),
+    /// which surfaces as a run of `.added` lines flanked by `.context`. Dependency-free.
+    static func unifiedDiff(old: String, new: String) -> [DiffLine] {
+        let oldLines = splitLines(old)
+        let newLines = splitLines(new)
+        let n = oldLines.count, m = newLines.count
+
+        if n == 0 { return newLines.map { DiffLine(kind: .added, text: $0) } }
+        if m == 0 { return oldLines.map { DiffLine(kind: .removed, text: $0) } }
+
+        // LCS length table: dp[i][j] = LCS(oldLines[i...], newLines[j...]).
+        var dp = Array(repeating: Array(repeating: 0, count: m + 1), count: n + 1)
+        for i in stride(from: n - 1, through: 0, by: -1) {
+            for j in stride(from: m - 1, through: 0, by: -1) {
+                dp[i][j] = oldLines[i] == newLines[j]
+                    ? dp[i + 1][j + 1] + 1
+                    : max(dp[i + 1][j], dp[i][j + 1])
+            }
+        }
+
+        var out: [DiffLine] = []
+        var i = 0, j = 0
+        while i < n && j < m {
+            if oldLines[i] == newLines[j] {
+                out.append(DiffLine(kind: .context, text: oldLines[i])); i += 1; j += 1
+            } else if dp[i + 1][j] >= dp[i][j + 1] {
+                out.append(DiffLine(kind: .removed, text: oldLines[i])); i += 1
+            } else {
+                out.append(DiffLine(kind: .added, text: newLines[j])); j += 1
+            }
+        }
+        while i < n { out.append(DiffLine(kind: .removed, text: oldLines[i])); i += 1 }
+        while j < m { out.append(DiffLine(kind: .added, text: newLines[j])); j += 1 }
+        return out
+    }
+
+    /// Splits into lines on "\n", dropping a single trailing empty element so a file that ends in a
+    /// newline is not diffed as having an extra blank line.
+    private static func splitLines(_ s: String) -> [String] {
+        if s.isEmpty { return [] }
+        var lines = s.components(separatedBy: "\n")
+        if lines.last == "" { lines.removeLast() }
+        return lines
     }
 }

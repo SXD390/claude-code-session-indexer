@@ -91,6 +91,14 @@ try {
   // 8. No CORS headers leak anywhere
   r = await fetch(`${BASE}/api/sessions`, { headers: { 'X-CSI-Request': '1' } });
   check(!r.headers.get('access-control-allow-origin'), 'no Access-Control-Allow-Origin header');
+
+  // 9. The new dry-run handoff/preview endpoint enforces the same gates.
+  //    Missing custom header → 403 (CSRF), even with a well-formed UUID.
+  r = await fetch(`${BASE}/api/sessions/00000000-0000-0000-0000-000000000000/handoff/preview`);
+  check(r.status === 403, 'handoff/preview without X-CSI-Request → 403 (CSRF)');
+  //    Non-UUID id → 400 (route gate fires before the handler runs).
+  r = await fetch(`${BASE}/api/sessions/not-a-uuid/handoff/preview`, { headers: { 'X-CSI-Request': '1' } });
+  check(r.status === 400, 'handoff/preview with bad id → 400 (BAD_ID gate)');
 } catch (err) {
   console.error('smoke test error:', err.message);
   failures.push('harness: ' + err.message);

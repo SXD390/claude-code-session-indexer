@@ -173,6 +173,8 @@
     handoffErr: {},          // sessionId -> error string
     handoffWritten: {},      // sessionId -> written path list
     includeClaudeMd: {},     // sessionId -> checkbox state
+    handoffPreview: {},      // sessionId -> dry-run preview { cwdExists, progress, claude }
+    handoffPreviewLoading: {}, // sessionId -> bool (fetching the diff preview)
   };
 
   // ---- DOM refs ----
@@ -673,6 +675,62 @@
     }
   }
 
+  // ---- Handoff diff (client-side line diff of current vs proposed) ----
+  function splitLines(t) {
+    const a = String(t == null ? '' : t).replace(/\r\n/g, '\n').split('\n');
+    if (a.length && a[a.length - 1] === '') a.pop(); // drop the trailing-newline artifact
+    return a;
+  }
+  // LCS-based line diff, but we peel common prefix/suffix first so the quadratic
+  // core stays tiny for the common "insert a block near the top" case. Returns
+  // rows: { t:'add'|'del'|'ctx', s:'<line>' }.
+  function lineDiff(oldText, newText) {
+    const a = splitLines(oldText), b = splitLines(newText);
+    let lo = 0;
+    const head = [];
+    while (lo < a.length && lo < b.length && a[lo] === b[lo]) { head.push({ t: 'ctx', s: a[lo] }); lo++; }
+    let ai = a.length, bi = b.length;
+    const tailR = [];
+    while (ai > lo && bi > lo && a[ai - 1] === b[bi - 1]) { ai--; bi--; tailR.unshift({ t: 'ctx', s: a[ai] }); }
+    const am = a.slice(lo, ai), bm = b.slice(lo, bi);
+    let mid;
+    // Guard the O(n*m) table; huge middles are rare (only giant edited files).
+    if (am.length * bm.length > 400000) {
+      mid = am.map((s) => ({ t: 'del', s })).concat(bm.map((s) => ({ t: 'add', s })));
+    } else {
+      const n = am.length, m = bm.length;
+      const dp = [];
+      for (let i = 0; i <= n; i++) dp.push(new Int32Array(m + 1));
+      for (let i = n - 1; i >= 0; i--) {
+        for (let j = m - 1; j >= 0; j--) {
+          dp[i][j] = am[i] === bm[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+        }
+      }
+      mid = [];
+      let i = 0, j = 0;
+      while (i < n && j < m) {
+        if (am[i] === bm[j]) { mid.push({ t: 'ctx', s: am[i] }); i++; j++; }
+        else if (dp[i + 1][j] >= dp[i][j + 1]) { mid.push({ t: 'del', s: am[i] }); i++; }
+        else { mid.push({ t: 'add', s: bm[j] }); j++; }
+      }
+      while (i < n) { mid.push({ t: 'del', s: am[i] }); i++; }
+      while (j < m) { mid.push({ t: 'add', s: bm[j] }); j++; }
+    }
+    return head.concat(mid, tailR);
+  }
+  // f = { current, proposed, exists }. When the file is new, show the whole proposed
+  // as added with a "New file" banner.
+  function handoffDiffHTML(f) {
+    const isNew = !f.exists;
+    const rows = lineDiff(f.current, f.proposed);
+    const body = rows.map((r) => {
+      const g = r.t === 'add' ? '+' : (r.t === 'del' ? '-' : ' ');
+      return `<div class="ho-drow ${r.t}"><span class="ho-dg">${g}</span><span class="ho-dt">${esc(r.s) || ' '}</span></div>`;
+    }).join('');
+    const banner = isNew ? `<div class="ho-dnew">New file — entire contents added</div>` : '';
+    return `<div class="ho-diff">${banner}${body}</div>`;
+  }
+
   // ---- Handoff card ----
   function handoffStale(s, record) {
     const gen = Date.parse((record && record.generatedAt) || (s.handoff && s.handoff.generatedAt)) || 0;
@@ -721,18 +779,42 @@
       }
     }
 
-    // PROGRESS.md preview
-    html += `<div class="ho-sec">
-      <div class="ho-sec-h"><span class="ho-fname">PROGRESS.md</span><span class="ho-flag">${record.progressMdExists ? 'inserts a new dated section' : 'creates the file'}</span></div>
-      <pre class="ho-pre">${esc(record.progress || '—')}</pre>
-    </div>`;
+    const preview = state.handoffPreview[id];
 
-    // CLAUDE.md preview + toggle (only when durable knowledge exists)
+    // PROGRESS.md — diff of current vs proposed (falls back to the raw section
+    // while the dry-run preview is still loading).
+    {
+      const pv = preview && preview.progress;
+      const willExist = pv ? pv.exists : record.progressMdExists;
+      html += `<div class="ho-sec">
+        <div class="ho-sec-h">
+          <span class="ho-fname">PROGRESS.md</span>
+          <div class="ho-sec-r">
+            <span class="ho-flag">${willExist ? 'inserts a new dated section' : 'creates the file'}</span>
+            ${pv ? `<button class="ho-copy" id="hoProgCopy">${icon('copy')} Copy merged</button>` : ''}
+          </div>
+        </div>
+        ${pv ? handoffDiffHTML(pv) : `<pre class="ho-pre">${esc(record.progress || '—')}</pre>`}
+      </div>`;
+    }
+
+    // CLAUDE.md preview + toggle (only when durable knowledge exists). The diff
+    // renders only when the checkbox is on (that's when the file will change);
+    // otherwise the raw durable section is shown for reference.
     if (record.claudeSection) {
       const checked = state.includeClaudeMd[id];
+      const cv = preview && preview.claude;
+      const willExist = cv ? cv.exists : record.claudeMdExists;
+      const showDiff = checked && cv;
       html += `<div class="ho-sec">
-        <div class="ho-sec-h"><span class="ho-fname">CLAUDE.md</span><span class="ho-flag">${record.claudeMdExists ? 'appends a marked section' : 'creates the file'}</span></div>
-        <pre class="ho-pre">${esc(record.claudeSection)}</pre>
+        <div class="ho-sec-h">
+          <span class="ho-fname">CLAUDE.md</span>
+          <div class="ho-sec-r">
+            <span class="ho-flag">${willExist ? 'appends a marked section' : 'creates the file'}</span>
+            ${cv ? `<button class="ho-copy" id="hoClaudeCopy">${icon('copy')} Copy merged</button>` : ''}
+          </div>
+        </div>
+        ${showDiff ? handoffDiffHTML(cv) : `<pre class="ho-pre">${esc(record.claudeSection)}</pre>`}
         <label class="ho-check"><input type="checkbox" id="hoClaudeChk" ${checked ? 'checked' : ''} /><span>Also update CLAUDE.md</span></label>
         <div class="ho-check-note">appends a marked section — never overwrites your file</div>
       </div>`;
@@ -778,9 +860,35 @@
     const prep = $('#hoPrepBtn'); if (prep) prep.addEventListener('click', () => genHandoff(id));
     const regen = $('#hoRegenBtn'); if (regen) regen.addEventListener('click', () => genHandoff(id));
     const write = $('#hoWriteBtn'); if (write) write.addEventListener('click', () => writeHandoffFiles(id));
-    const chk = $('#hoClaudeChk'); if (chk) chk.addEventListener('change', (e) => { state.includeClaudeMd[id] = e.target.checked; });
-    const kc = $('#hoKickCopy'); const rec = state.handoffs[id];
+    // Toggling the checkbox re-fetches the preview so the CLAUDE.md diff appears/
+    // disappears and the `included` flag stays in sync with what a write would do.
+    const chk = $('#hoClaudeChk'); if (chk) chk.addEventListener('change', (e) => { state.includeClaudeMd[id] = e.target.checked; loadHandoffPreview(s, true); });
+    const rec = state.handoffs[id];
+    const kc = $('#hoKickCopy');
     if (kc && rec) kc.addEventListener('click', (e) => copyText(rec.kickstart, e.currentTarget, 'Kickstart prompt copied'));
+    // Copy-only actions: copy the resulting MERGED file contents without writing.
+    const preview = state.handoffPreview[id];
+    const pc = $('#hoProgCopy');
+    if (pc && preview && preview.progress) pc.addEventListener('click', (e) => copyText(preview.progress.proposed, e.currentTarget, 'Merged PROGRESS.md copied'));
+    const cc = $('#hoClaudeCopy');
+    if (cc && preview && preview.claude) cc.addEventListener('click', (e) => copyText(preview.claude.proposed, e.currentTarget, 'Merged CLAUDE.md copied'));
+  }
+  // Dry-run: fetch the current-vs-proposed preview (server reuses the write-path
+  // merge). `force` re-fetches even if one is in flight (used on checkbox toggle).
+  async function loadHandoffPreview(s, force) {
+    const id = s.sessionId;
+    const record = state.handoffs[id];
+    if (!record) return;
+    if (state.handoffPreviewLoading[id] && !force) return;
+    state.handoffPreviewLoading[id] = true;
+    const inc = (!!state.includeClaudeMd[id] && !!record.claudeSection) ? '1' : '0';
+    try {
+      const r = await apiFetch('/api/sessions/' + encodeURIComponent(id) + '/handoff/preview?includeClaudeMd=' + inc, { cache: 'no-store' });
+      state.handoffPreviewLoading[id] = false;
+      if (!r.ok) return; // leave the raw-section fallback in place
+      state.handoffPreview[id] = await r.json();
+      rerenderHandoff(s);
+    } catch (e) { state.handoffPreviewLoading[id] = false; }
   }
   async function loadHandoff(s) {
     const id = s.sessionId;
@@ -793,6 +901,7 @@
       state.handoffs[id] = data;
       if (!(id in state.includeClaudeMd)) state.includeClaudeMd[id] = !data.claudeMdExists;
       rerenderHandoff(s);
+      loadHandoffPreview(s); // fetch the diff for the just-loaded handoff
     } catch (e) { /* leave placeholder */ }
   }
   async function genHandoff(id) {
@@ -800,6 +909,7 @@
     state.handoffLoading[id] = true;
     state.handoffErr[id] = null;
     state.handoffWritten[id] = null;
+    state.handoffPreview[id] = null; // stale — recomputed once the new record lands
     const s = state.sessions.find((x) => x.sessionId === id);
     rerenderHandoff(s);
     status('Preparing handoff via claude CLI…');
@@ -814,6 +924,7 @@
       if (s) s.handoff = { generatedAt: data.generatedAt, sessionLastActivity: data.sessionLastActivity, hasClaudeSection: !!data.claudeSection };
       status('Handoff ready', 'ok');
       rerenderHandoff(s);
+      if (s) loadHandoffPreview(s); // fetch the diff for the fresh handoff
     } catch (e) {
       state.handoffLoading[id] = false;
       state.handoffErr[id] = e.message;

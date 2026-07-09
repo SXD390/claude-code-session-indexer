@@ -618,6 +618,8 @@ struct HandoffCard: View {
     @State private var writtenPaths: [URL] = []
     @State private var writeError: String?
     @State private var copiedKickstart = false
+    @State private var copiedProgress = false
+    @State private var copiedClaude = false
     @Environment(\.colorScheme) private var scheme
 
     private var handoff: StoredHandoff? { store.handoffs[session.sessionId] }
@@ -639,6 +641,28 @@ struct HandoffCard: View {
     private var claudeExists: Bool {
         guard let url = cwdURL else { return false }
         return FileManager.default.fileExists(atPath: url.appendingPathComponent("CLAUDE.md").path)
+    }
+
+    /// Current on-disk contents of a file inside the project dir, or nil if unreadable / absent.
+    private func onDisk(_ name: String) -> String? {
+        guard let url = cwdURL else { return nil }
+        return try? String(contentsOf: url.appendingPathComponent(name), encoding: .utf8)
+    }
+
+    /// The EXACT bytes `writeToProject` would produce for PROGRESS.md — used for both the diff
+    /// preview and the "Copy PROGRESS.md" action, so preview, copy, and write can never diverge.
+    private func mergedProgressContent(_ h: StoredHandoff) -> String {
+        HandoffService.mergedProgress(
+            existing: onDisk("PROGRESS.md"),
+            projectName: session.projectDisplayName,
+            section: h.progress)
+    }
+
+    /// The EXACT bytes `writeToProject` would produce for CLAUDE.md (merged marker block).
+    private func mergedClaudeContent(_ claude: String) -> String {
+        HandoffService.mergedClaude(
+            existing: onDisk("CLAUDE.md"),
+            block: HandoffService.markerBlock(content: claude))
     }
 
     var body: some View {
@@ -697,14 +721,22 @@ struct HandoffCard: View {
                 .fixedSize(horizontal: false, vertical: true)
         }
 
-        // PROGRESS.md preview
+        // PROGRESS.md — diff preview of exactly what "Write to Project" would produce.
         section(label: "PROGRESS.md",
                 note: progressExists ? "prepends a new dated section — existing content is preserved"
                                      : "will create PROGRESS.md") {
-            fileBox(h.progress, maxHeight: 210)
+            if cwdValid {
+                diffBox(old: onDisk("PROGRESS.md") ?? "",
+                        new: mergedProgressContent(h),
+                        isNewFile: !progressExists,
+                        maxHeight: 240)
+            } else {
+                // No valid project dir → no diff; still show the generated section so it can be copied.
+                fileBox(h.progress, maxHeight: 210)
+            }
         }
 
-        // CLAUDE.md preview (hidden entirely when the model returned NONE)
+        // CLAUDE.md — diff preview (hidden entirely when the model returned NONE)
         if let claude = h.claude, !claude.isEmpty {
             VStack(alignment: .leading, spacing: 7) {
                 HStack(spacing: 8) {
@@ -722,7 +754,14 @@ struct HandoffCard: View {
                     .font(.system(size: 10.5))
                     .foregroundStyle(.tertiary)
                 if alsoUpdateClaude {
-                    fileBox(HandoffService.markerBlock(content: claude), maxHeight: 170)
+                    if cwdValid {
+                        diffBox(old: onDisk("CLAUDE.md") ?? "",
+                                new: mergedClaudeContent(claude),
+                                isNewFile: !claudeExists,
+                                maxHeight: 190)
+                    } else {
+                        fileBox(HandoffService.markerBlock(content: claude), maxHeight: 170)
+                    }
                 }
             }
         }
@@ -747,29 +786,67 @@ struct HandoffCard: View {
     }
 
     private func actionsRow(_ h: StoredHandoff) -> some View {
-        HStack(spacing: 10) {
-            Button {
-                performWrite(h)
-            } label: {
-                Label("Write to Project", systemImage: "square.and.arrow.down.on.square")
-            }
-            .buttonStyle(GradientButtonStyle())
-            .disabled(!cwdValid)
-            .help(cwdValid ? "Writes PROGRESS.md" + (writesClaude(h) ? " and CLAUDE.md" : "") + " into \(session.cwd ?? "")"
-                           : "No valid project directory for this session")
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 10) {
+                Button {
+                    performWrite(h)
+                } label: {
+                    Label("Write to Project", systemImage: "square.and.arrow.down.on.square")
+                }
+                .buttonStyle(GradientButtonStyle())
+                .disabled(!cwdValid)
+                .help(cwdValid ? "Writes PROGRESS.md" + (writesClaude(h) ? " and CLAUDE.md" : "") + " into \(session.cwd ?? "")"
+                               : "No valid project directory for this session")
 
-            actionButton(label: "Regenerate")
+                actionButton(label: "Regenerate")
 
-            Spacer(minLength: 6)
+                Spacer(minLength: 6)
 
-            VStack(alignment: .trailing, spacing: 2) {
-                Text("Generated \(h.generatedAt.formatted(.relative(presentation: .named)))")
-                    .font(.caption).foregroundStyle(.tertiary)
-                if store.handoffIsStale(for: session) {
-                    Label("New activity since", systemImage: "exclamationmark.circle.fill")
-                        .font(.caption).foregroundStyle(.orange)
+                VStack(alignment: .trailing, spacing: 2) {
+                    Text("Generated \(h.generatedAt.formatted(.relative(presentation: .named)))")
+                        .font(.caption).foregroundStyle(.tertiary)
+                    if store.handoffIsStale(for: session) {
+                        Label("New activity since", systemImage: "exclamationmark.circle.fill")
+                            .font(.caption).foregroundStyle(.orange)
+                    }
                 }
             }
+
+            // Copy-only: put the resulting merged file(s) on the clipboard without writing to disk.
+            HStack(spacing: 10) {
+                Button {
+                    ResumeService.copy(mergedProgressContent(h))
+                    flashCopy($copiedProgress)
+                } label: {
+                    Label(copiedProgress ? "Copied PROGRESS.md" : "Copy PROGRESS.md",
+                          systemImage: copiedProgress ? "checkmark" : "doc.on.doc")
+                }
+                .buttonStyle(SoftButtonStyle())
+                .help("Copy the resulting PROGRESS.md to the clipboard — nothing is written to disk")
+
+                if let claude = h.claude, !claude.isEmpty {
+                    Button {
+                        ResumeService.copy(mergedClaudeContent(claude))
+                        flashCopy($copiedClaude)
+                    } label: {
+                        Label(copiedClaude ? "Copied CLAUDE.md" : "Copy CLAUDE.md",
+                              systemImage: copiedClaude ? "checkmark" : "doc.on.doc")
+                    }
+                    .buttonStyle(SoftButtonStyle())
+                    .help("Copy the resulting CLAUDE.md to the clipboard — nothing is written to disk")
+                }
+
+                Spacer()
+            }
+        }
+    }
+
+    /// Flip a copied-flag on for 1.5s (flash-to-checkmark), matching the app's other copy buttons.
+    private func flashCopy(_ binding: Binding<Bool>) {
+        binding.wrappedValue = true
+        Task {
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            binding.wrappedValue = false
         }
     }
 
@@ -887,6 +964,125 @@ struct HandoffCard: View {
         .frame(maxHeight: maxHeight)
         .background(Theme.field, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous).strokeBorder(Theme.border, lineWidth: 1))
+    }
+
+    /// A compact, scrollable unified-diff of `old` → `new`: added lines get a green "+" gutter and
+    /// tint, removed lines a coral "-", and unchanged context is dimmed and collapsed to a few lines
+    /// around each change. A brand-new file is shown entirely as additions under a "New file" strip.
+    private func diffBox(old: String, new: String, isNewFile: Bool, maxHeight: CGFloat) -> some View {
+        let rows = HandoffCard.diffRows(old: old, new: new)
+        return VStack(alignment: .leading, spacing: 0) {
+            if isNewFile {
+                HStack(spacing: 6) {
+                    Image(systemName: "doc.badge.plus")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(Theme.running)
+                    Text("New file")
+                        .font(.system(size: 10.5, weight: .semibold, design: .rounded))
+                        .foregroundStyle(Theme.running)
+                    Spacer()
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 7)
+                .background(Theme.running.opacity(0.08))
+                Divider().overlay(Theme.border)
+            }
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(rows) { row in
+                        switch row.content {
+                        case .line(let line): diffLineRow(line)
+                        case .gap(let hidden): diffGapRow(hidden)
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.vertical, 6)
+            }
+            .frame(maxHeight: maxHeight)
+        }
+        .background(Theme.field, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous).strokeBorder(Theme.border, lineWidth: 1))
+    }
+
+    private func diffLineRow(_ line: HandoffService.DiffLine) -> some View {
+        let style = diffLineStyle(line.kind)
+        return HStack(alignment: .top, spacing: 8) {
+            Text(style.gutter)
+                .font(.system(size: 11.5, weight: .bold, design: .monospaced))
+                .foregroundStyle(style.gutterColor)
+                .frame(width: 8, alignment: .leading)
+            Text(line.text.isEmpty ? " " : line.text)
+                .font(.system(size: 11.5, design: .monospaced))
+                .foregroundStyle(style.textColor)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 1.5)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(style.bg)
+    }
+
+    private func diffLineStyle(_ kind: HandoffService.DiffLine.Kind)
+        -> (gutter: String, gutterColor: Color, bg: Color, textColor: Color) {
+        switch kind {
+        case .added:   return ("+", Theme.running, Theme.running.opacity(0.13), .primary)
+        case .removed: return ("-", Theme.coral, Theme.coral.opacity(0.10), .secondary)
+        case .context: return (" ", .clear, .clear, .secondary)
+        }
+    }
+
+    private func diffGapRow(_ hidden: Int) -> some View {
+        HStack(spacing: 8) {
+            Text("⋯")
+                .font(.system(size: 11.5, weight: .bold, design: .monospaced))
+                .foregroundStyle(.tertiary)
+                .frame(width: 8, alignment: .leading)
+            Text("\(hidden) unchanged line\(hidden == 1 ? "" : "s")")
+                .font(.system(size: 10.5, design: .rounded))
+                .foregroundStyle(.tertiary)
+            Spacer()
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 2)
+    }
+
+    /// One row of the rendered diff: either a real diff line or a collapsed-context gap marker.
+    private struct DiffDisplayRow: Identifiable {
+        enum Content { case line(HandoffService.DiffLine); case gap(Int) }
+        let id: Int
+        let content: Content
+    }
+
+    /// Turns a full line diff into display rows, collapsing runs of unchanged context to `context`
+    /// lines around each change (replacing the hidden middle with a single gap marker). A pure
+    /// insertion (all `.added`, e.g. a new file) keeps every line — nothing to collapse.
+    private static func diffRows(old: String, new: String, context: Int = 3) -> [DiffDisplayRow] {
+        let diff = HandoffService.unifiedDiff(old: old, new: new)
+        guard !diff.isEmpty else { return [] }
+
+        // Mark which lines to keep: every change, plus `context` lines on either side.
+        var keep = Array(repeating: false, count: diff.count)
+        for (i, d) in diff.enumerated() where d.kind != .context {
+            for k in max(0, i - context)...min(diff.count - 1, i + context) { keep[k] = true }
+        }
+
+        var rows: [DiffDisplayRow] = []
+        var id = 0
+        var i = 0
+        while i < diff.count {
+            if keep[i] {
+                rows.append(DiffDisplayRow(id: id, content: .line(diff[i]))); id += 1; i += 1
+            } else {
+                var j = i
+                while j < diff.count && !keep[j] { j += 1 }
+                rows.append(DiffDisplayRow(id: id, content: .gap(j - i))); id += 1
+                i = j
+            }
+        }
+        return rows
     }
 
     /// KICKSTART — reuses the Pickup Brief's NEXT PROMPT terminal-block styling.

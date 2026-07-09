@@ -70,4 +70,128 @@ final class CoreTests: XCTestCase {
         bad.cwd = "/tmp"
         XCTAssertNil(ResumeService.makeResumeScript(session: bad))
     }
+
+    // MARK: - Handoff merge (pure functions shared by write + diff/copy previews)
+
+    private let section = "## 2026-07-10 — New Work\n**Done**\n- shipped the thing"
+
+    /// Prepending under a leading "# " title keeps the title first, the new section next, and
+    /// preserves everything that was below (the older sections).
+    func testMergedProgressPrependsUnderTitle() {
+        let existing = """
+        # Progress — demo
+
+        ## 2026-07-09 — Older Work
+        **Done**
+        - earlier stuff
+        """
+        let out = HandoffService.mergedProgress(existing: existing, projectName: "demo", section: section)
+
+        XCTAssertTrue(out.hasPrefix("# Progress — demo\n\n## 2026-07-10 — New Work"),
+                      "title stays first, new dated section is inserted directly after it")
+        XCTAssertTrue(out.contains("## 2026-07-09 — Older Work"), "old section is preserved")
+        XCTAssertTrue(out.contains("- earlier stuff"), "old content is preserved")
+        // New section must appear ABOVE the old one.
+        let newIdx = out.range(of: "## 2026-07-10")!.lowerBound
+        let oldIdx = out.range(of: "## 2026-07-09")!.lowerBound
+        XCTAssertTrue(newIdx < oldIdx, "newest section is on top")
+        XCTAssertTrue(out.hasSuffix("\n"), "always terminated with a newline")
+    }
+
+    /// A missing (nil) file is created fresh with a "# Progress — <name>" title.
+    func testMergedProgressFreshFile() {
+        let out = HandoffService.mergedProgress(existing: nil, projectName: "demo", section: section)
+        XCTAssertEqual(out, "# Progress — demo\n\n## 2026-07-10 — New Work\n**Done**\n- shipped the thing\n")
+
+        // An empty existing file is treated the same as no file.
+        XCTAssertEqual(HandoffService.mergedProgress(existing: "", projectName: "demo", section: section), out)
+    }
+
+    /// A file with no leading "# " title gets the section prepended at the very top.
+    func testMergedProgressPrependsWhenNoTitle() {
+        let out = HandoffService.mergedProgress(existing: "just some notes\n", projectName: "demo", section: section)
+        XCTAssertTrue(out.hasPrefix("## 2026-07-10 — New Work"))
+        XCTAssertTrue(out.contains("just some notes"))
+    }
+
+    /// Upserting the managed block into a CLAUDE.md that already has one REPLACES it in place —
+    /// it does not duplicate the block, and content outside the markers is untouched.
+    func testMergedClaudeReplacesNotDuplicates() {
+        let firstBlock = HandoffService.markerBlock(content: "old durable knowledge")
+        let existing = "# My CLAUDE.md\n\nHand-written notes.\n\n\(firstBlock)\n"
+
+        let newBlock = HandoffService.markerBlock(content: "new durable knowledge")
+        let out = HandoffService.mergedClaude(existing: existing, block: newBlock)
+
+        XCTAssertEqual(out.components(separatedBy: HandoffService.claudeStartMarker).count, 2,
+                       "exactly one start marker (block replaced, not duplicated)")
+        XCTAssertEqual(out.components(separatedBy: HandoffService.claudeEndMarker).count, 2,
+                       "exactly one end marker")
+        XCTAssertTrue(out.contains("new durable knowledge"), "block content updated")
+        XCTAssertFalse(out.contains("old durable knowledge"), "old block content is gone")
+        XCTAssertTrue(out.contains("Hand-written notes."), "user content outside markers is preserved")
+    }
+
+    /// Creating (nil existing) yields the block only; appending to an unmarked file keeps the
+    /// user's text and adds the block after it.
+    func testMergedClaudeCreateAndAppend() {
+        let block = HandoffService.markerBlock(content: "durable")
+
+        let created = HandoffService.mergedClaude(existing: nil, block: block)
+        XCTAssertEqual(created, block + "\n")
+
+        let appended = HandoffService.mergedClaude(existing: "user notes", block: block)
+        XCTAssertTrue(appended.hasPrefix("user notes"), "existing content stays on top")
+        XCTAssertTrue(appended.contains(block), "block is appended")
+        XCTAssertTrue(appended.hasSuffix("\n"))
+    }
+
+    // MARK: - Unified line diff
+
+    /// A pure insertion (new dated section prepended under a kept title) shows exactly the new
+    /// lines as `.added`, with the surrounding unchanged lines as `.context`.
+    func testUnifiedDiffPureInsertion() {
+        let old = "# Progress — demo\n\n## 2026-07-09 — Older\n- earlier\n"
+        let new = HandoffService.mergedProgress(existing: old, projectName: "demo", section: section)
+        let diff = HandoffService.unifiedDiff(old: old, new: new)
+
+        // No removals — this is an insertion only.
+        XCTAssertFalse(diff.contains { $0.kind == .removed }, "nothing is removed on a pure insertion")
+
+        let added = diff.filter { $0.kind == .added }.map(\.text)
+        XCTAssertTrue(added.contains("## 2026-07-10 — New Work"), "the new heading is added")
+        XCTAssertTrue(added.contains("- shipped the thing"), "the new body line is added")
+
+        let context = diff.filter { $0.kind == .context }.map(\.text)
+        XCTAssertTrue(context.contains("# Progress — demo"), "the kept title is context")
+        XCTAssertTrue(context.contains("## 2026-07-09 — Older"), "the preserved old section is context")
+
+        // Concatenating context+added in order must reconstruct the new file's lines exactly.
+        let rebuilt = diff.filter { $0.kind != .removed }.map(\.text).joined(separator: "\n") + "\n"
+        XCTAssertEqual(rebuilt, new, "diff faithfully represents the merged result")
+    }
+
+    /// A brand-new file diffs as every line added.
+    func testUnifiedDiffNewFileIsAllAdded() {
+        let new = "line one\nline two\nline three\n"
+        let diff = HandoffService.unifiedDiff(old: "", new: new)
+        XCTAssertEqual(diff.count, 3)
+        XCTAssertTrue(diff.allSatisfy { $0.kind == .added })
+        XCTAssertEqual(diff.map(\.text), ["line one", "line two", "line three"])
+    }
+
+    /// The copy buttons copy EXACTLY what the writer would produce — assert the merged strings
+    /// are the single source of truth (this is what "Copy PROGRESS.md/CLAUDE.md" put on the pasteboard).
+    func testMergedContentMatchesWhatCopyProduces() {
+        // PROGRESS.md fresh-file copy target.
+        let progressCopy = HandoffService.mergedProgress(existing: nil, projectName: "demo", section: section)
+        XCTAssertEqual(progressCopy, "# Progress — demo\n\n\(section)\n")
+
+        // CLAUDE.md fresh-file copy target is the marker block only.
+        let claudeCopy = HandoffService.mergedClaude(
+            existing: nil, block: HandoffService.markerBlock(content: "durable notes"))
+        XCTAssertTrue(claudeCopy.hasPrefix(HandoffService.claudeStartMarker))
+        XCTAssertTrue(claudeCopy.contains("durable notes"))
+        XCTAssertTrue(claudeCopy.contains(HandoffService.claudeEndMarker))
+    }
 }

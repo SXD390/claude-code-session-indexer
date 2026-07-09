@@ -778,6 +778,47 @@ svg.ic { width: 15px; height: 15px; flex: none; }
 .ho-actions { display: flex; gap: 10px; margin-top: 16px; flex-wrap: wrap; }
 .ho-actions .btn .spinner { border-color: rgba(255,255,255,0.4); border-top-color: #fff; }
 
+/* right side of a file section header: flag pill + copy-only button */
+.ho-sec-r { display: flex; align-items: center; gap: 8px; flex: none; }
+.ho-copy {
+  display: inline-flex; align-items: center; gap: 5px; font-family: var(--font-sans);
+  font-size: 11px; font-weight: 600; color: var(--text-dim); background: var(--surface);
+  border: 1px solid var(--border); padding: 4px 9px; border-radius: 7px; white-space: nowrap;
+  transition: color var(--dur) var(--ease), border-color var(--dur) var(--ease), background var(--dur) var(--ease);
+}
+.ho-copy:hover { color: var(--text); background: var(--surface-2); border-color: var(--border-strong); }
+.ho-copy svg.ic { width: 12px; height: 12px; }
+.ho-copy.copied { color: var(--running); border-color: color-mix(in srgb, var(--running) 40%, transparent); }
+
+/* current-vs-proposed line diff */
+.ho-diff {
+  font-family: var(--font-mono); font-size: 11.5px; line-height: 1.55; color: var(--text);
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--r-md);
+  padding: 6px 0; margin: 0; max-height: 260px; overflow: auto;
+}
+.ho-dnew {
+  font-family: var(--font-sans); font-size: 10.5px; font-weight: 650; letter-spacing: 0.03em;
+  text-transform: uppercase; color: var(--running); padding: 4px 12px 8px; margin-bottom: 2px;
+  border-bottom: 1px solid var(--border);
+}
+.ho-drow { display: flex; align-items: flex-start; padding: 0 10px; }
+.ho-dg { flex: none; width: 1.3em; text-align: center; color: var(--text-faint); user-select: none; opacity: 0.85; }
+.ho-dt { flex: 1 1 auto; white-space: pre-wrap; word-break: break-word; min-width: 0; }
+.ho-drow.ctx { color: var(--text-dim); }
+.ho-drow.add { background: rgba(89,194,126,0.13); color: #63C489; }
+.ho-drow.add .ho-dg { color: #59C27E; opacity: 1; }
+.ho-drow.del { background: rgba(232,112,91,0.11); color: #E8705B; }
+.ho-drow.del .ho-dg { color: #E8705B; opacity: 1; }
+/* Light theme: deepen add/del text for contrast on light surfaces. Applies when the
+   user picks light explicitly, or when no theme is set AND the OS prefers light —
+   mirroring the token convention above so dark mode keeps its brighter greens. */
+:root[data-theme="light"] .ho-drow.add { color: #1F8A50; }
+:root[data-theme="light"] .ho-drow.del { color: #C6472F; }
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme]) .ho-drow.add { color: #1F8A50; }
+  :root:not([data-theme]) .ho-drow.del { color: #C6472F; }
+}
+
 /* ---- per-session Usage card (detail) ---- */
 .usage-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-lg); padding: 16px 18px; }
 .usage-tokens { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px; background: var(--border); border: 1px solid var(--border); border-radius: var(--r-md); overflow: hidden; }

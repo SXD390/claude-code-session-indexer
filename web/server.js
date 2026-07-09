@@ -1238,6 +1238,25 @@ function upsertClaudeBlock(existing, block) {
   return out;
 }
 
+// Merge the generated PROGRESS section into whatever is on disk. `existing` is the
+// current file text, or null when the file doesn't exist yet (create a titled file).
+// SHARED by writeHandoff (the real write) and the dry-run preview, so the previewed
+// bytes are byte-for-byte what a write would produce.
+function buildProgressContent(existing, section, project) {
+  const sec = (section || '').trim();
+  if (existing == null) return '# Progress — ' + project + '\n\n' + sec + '\n';
+  return insertProgressSection(existing, sec);
+}
+
+// Merge our durable CLAUDE.md block into whatever is on disk. `existing` is the
+// current file text, or null when the file doesn't exist yet. SHARED by writeHandoff
+// and the preview so preview == write.
+function buildClaudeContent(existing, claudeSection) {
+  const block = HANDOFF_CLAUDE_START + '\n' + (claudeSection || '').trim() + '\n' + HANDOFF_CLAUDE_END;
+  if (existing == null) return block + '\n';
+  return upsertClaudeBlock(existing, block);
+}
+
 // Write PROGRESS.md (always) and CLAUDE.md (when asked) into the session's cwd.
 // Target dir + filenames are entirely server-derived — the client supplies no path.
 async function writeHandoff(meta, record, includeClaudeMd) {
@@ -1264,27 +1283,73 @@ async function writeHandoff(meta, record, includeClaudeMd) {
 
   // --- PROGRESS.md (always) ---
   const progressPath = path.join(cwd, 'PROGRESS.md');
-  const section = (record.progress || '').trim();
   let existing = null;
   try { existing = await fsp.readFile(progressPath, 'utf8'); } catch (_) { existing = null; }
-  const progressContent = (existing == null)
-    ? '# Progress — ' + project + '\n\n' + section + '\n'
-    : insertProgressSection(existing, section);
+  const progressContent = buildProgressContent(existing, record.progress, project);
   await fsp.writeFile(progressPath, progressContent);
   written.push(progressPath);
 
   // --- CLAUDE.md (opt-in, only when there's durable content) ---
   if (includeClaudeMd && record.claudeSection) {
     const claudePath = path.join(cwd, 'CLAUDE.md');
-    const block = HANDOFF_CLAUDE_START + '\n' + record.claudeSection.trim() + '\n' + HANDOFF_CLAUDE_END;
     let cExisting = null;
     try { cExisting = await fsp.readFile(claudePath, 'utf8'); } catch (_) { cExisting = null; }
-    const claudeContent = (cExisting == null) ? block + '\n' : upsertClaudeBlock(cExisting, block);
+    const claudeContent = buildClaudeContent(cExisting, record.claudeSection);
     await fsp.writeFile(claudePath, claudeContent);
     written.push(claudePath);
   }
 
   return written;
+}
+
+// Dry-run preview of a handoff write: reads the CURRENT PROGRESS.md / CLAUDE.md from
+// the session's (server-derived) cwd and computes the PROPOSED merged text with the
+// exact same builders writeHandoff uses — so what the UI diffs is what a write emits.
+// Never trusts a client-supplied path; never writes anything.
+async function handoffPreview(meta, record, includeClaudeMd) {
+  const cwd = meta.cwd || null;
+  let cwdExists = false;
+  if (cwd) {
+    try { const st = await fsp.stat(cwd); cwdExists = st.isDirectory(); } catch (_) { cwdExists = false; }
+  }
+  const project = projectDisplayName(meta);
+
+  // Read a file under cwd. Missing cwd / missing file → exists:false, current:''.
+  async function readCurrent(fileName) {
+    const p = cwd ? path.join(cwd, fileName) : null;
+    if (!p || !cwdExists) return { path: p, exists: false, current: '' };
+    try {
+      const text = await fsp.readFile(p, 'utf8');
+      return { path: p, exists: true, current: text };
+    } catch (_) {
+      return { path: p, exists: false, current: '' };
+    }
+  }
+
+  const pf = await readCurrent('PROGRESS.md');
+  const progress = {
+    path: pf.path,
+    exists: pf.exists,
+    current: pf.current,
+    proposed: buildProgressContent(pf.exists ? pf.current : null, record.progress, project),
+  };
+
+  // CLAUDE.md is only relevant when the model recorded durable knowledge. `included`
+  // mirrors the checkbox; `proposed` is computed regardless so a copy-only action
+  // works even while unchecked.
+  let claude = null;
+  if (record.claudeSection) {
+    const cf = await readCurrent('CLAUDE.md');
+    claude = {
+      included: !!includeClaudeMd,
+      path: cf.path,
+      exists: cf.exists,
+      current: cf.current,
+      proposed: buildClaudeContent(cf.exists ? cf.current : null, record.claudeSection),
+    };
+  }
+
+  return { cwdExists, progress, claude };
 }
 
 // ---------------------------------------------------------------------------
@@ -1624,6 +1689,23 @@ const server = http.createServer(async (req, res) => {
       }
     }
 
+    // Dry-run preview: current vs proposed PROGRESS.md / CLAUDE.md for the CACHED
+    // handoff record. Reuses the write-path merge builders (preview == write). Match
+    // BEFORE /handoff so the trailing "/preview" segment isn't misrouted. Same UUID
+    // gate + CSRF header + session-scoped rules as every other endpoint apply above.
+    const handoffPreviewMatch = pathname.match(/^\/api\/sessions\/([^/]+)\/handoff\/preview$/);
+    if (handoffPreviewMatch && method === 'GET') {
+      const id = handoffPreviewMatch[1];
+      const meta = await getSessionMeta(id);
+      if (!meta) return sendJson(res, 404, { error: 'Session not found' });
+      const record = handoffs[id];
+      // No cached handoff to preview — tell the UI to Generate first.
+      if (!record) return sendJson(res, 409, { error: 'Generate a handoff first.', code: 'NO_HANDOFF' });
+      const includeClaudeMd = parsed.searchParams.get('includeClaudeMd') === '1';
+      const preview = await handoffPreview(meta, record, includeClaudeMd);
+      return sendJson(res, 200, preview);
+    }
+
     // Write files into the session's project dir. Match BEFORE /handoff so the
     // trailing "/write" segment isn't misrouted.
     const handoffWriteMatch = pathname.match(/^\/api\/sessions\/([^/]+)\/handoff\/write$/);
@@ -1760,5 +1842,6 @@ if (require.main === module) {
 
 module.exports = {
   redactSecrets, rateFor, modelTier, insertProgressSection, upsertClaudeBlock,
+  buildProgressContent, buildClaudeContent,
   UUID_RE, HANDOFF_CLAUDE_START, HANDOFF_CLAUDE_END,
 };

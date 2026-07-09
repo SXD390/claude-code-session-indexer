@@ -70,5 +70,27 @@ eq(S.modelTier('claude-sonnet-4-6'), 'Sonnet', 'sonnet tier');
   ok(twice.includes('My own notes here.'), 'user notes still preserved after re-run');
 }
 
+// --- Handoff preview builders: the dry-run preview must merge EXACTLY like the
+// write path, so buildProgressContent/buildClaudeContent are the same functions the
+// preview and writeHandoff both call. Assert they agree with the primitives. ---
+{
+  const existing = '# Progress — demo\n\n## 2026-07-01 — old\n- a\n';
+  const section = '## 2026-07-08 — new\n- b';
+  eq(S.buildProgressContent(existing, section, 'demo'), S.insertProgressSection(existing, section),
+     'buildProgressContent(existing) === insertProgressSection (preview == write)');
+  const fresh = S.buildProgressContent(null, section, 'demo');
+  ok(fresh.startsWith('# Progress — demo'), 'buildProgressContent(null) creates a titled PROGRESS.md');
+  ok(fresh.includes('2026-07-08'), 'new-file PROGRESS includes the dated section');
+}
+{
+  const user = '# CLAUDE.md\n\nMy notes.\n';
+  const block = `${S.HANDOFF_CLAUDE_START}\ndurable knowledge\n${S.HANDOFF_CLAUDE_END}`;
+  eq(S.buildClaudeContent(user, 'durable knowledge'), S.upsertClaudeBlock(user, block),
+     'buildClaudeContent(existing) === upsertClaudeBlock (preview == write)');
+  const freshC = S.buildClaudeContent(null, 'durable knowledge');
+  ok(freshC.startsWith(S.HANDOFF_CLAUDE_START) && freshC.includes('durable knowledge'),
+     'buildClaudeContent(null) creates a fresh marked CLAUDE.md');
+}
+
 console.log(failures.length ? `\nWEB UNIT: ${failures.length} FAILURE(S)` : '\nWEB UNIT: ALL PASS');
 process.exit(failures.length ? 1 : 0);
