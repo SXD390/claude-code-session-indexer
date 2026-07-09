@@ -1,48 +1,139 @@
-# Claude Sessions
+<div align="center">
 
-A native macOS app for browsing, searching, and resuming your Claude Code sessions.
+# Reprise
 
-Claude Code stores every session as a `.jsonl` transcript under `~/.claude/projects/`. This app scans those transcripts and gives you a searchable, Mac-native library of all your chats — including the names you set with `/rename`, AI-generated titles, and which sessions are running right now.
+**Pick up any Claude Code session right where you left off.**
 
-![app](docs/screenshot.png)
+A beautiful, 100% local companion for the Claude Code CLI — browse every conversation,
+understand where the work stands, and jump back in with one click.
 
-## Features
+Native macOS app · Web dashboard for Windows & Linux · Zero cloud, zero telemetry
 
-- **Every session, one place** — grouped by project, sorted by recency, with your prompts count and last-activity time.
-- **Names front and center** — sessions you named (via `/rename`) show a tag badge; otherwise the AI title or first prompt is used.
-- **Resume in one click** — "Resume in Terminal" opens your default terminal, `cd`s into the project, and runs `claude --resume <id>`. Or copy the command / session ID to the clipboard.
-- **AI summaries** — generate a 2–3 sentence summary of any session on demand (uses `claude -p` with Haiku; cached on disk, flagged when stale).
-- **Running-now detection** — sessions with a live `claude` process get a green dot and a sidebar filter.
-- **Search** — matches names, titles, first prompts, summaries, project names, and session IDs.
-- **Conversation preview** — read the user/assistant exchange without leaving the app; reveal the raw transcript in Finder.
-- **Fast** — transcripts are parsed in parallel and cached (keyed by file mtime/size), so relaunches are instant.
+[![License: MIT](https://img.shields.io/badge/License-MIT-coral.svg)](LICENSE)
+[![macOS](https://img.shields.io/badge/macOS-14%2B-black?logo=apple)](#-macos-app)
+[![Web](https://img.shields.io/badge/Web-Node%2018%2B-333?logo=javascript)](#-web-app-windows--linux--macos)
+[![Dependencies](https://img.shields.io/badge/dependencies-zero-brightgreen)](#)
 
-## Build & install
+<img src="docs/mac-detail.png" alt="Reprise session detail with Pickup Brief" width="900">
 
-Requirements: macOS 14+, Xcode command-line tools.
+</div>
+
+---
+
+## Why Reprise?
+
+Claude Code stores every session as a JSONL transcript under `~/.claude/` — and then makes you
+scroll a terminal picker to find them again. Plenty of tools let you *view* that history or
+*count* your tokens. Reprise is built around a different idea: **continuity** — getting back
+into flow on work you started days ago.
+
+|  | History viewers | Usage meters | **Reprise** |
+|---|:---:|:---:|:---:|
+| Browse & resume sessions | ✅ | — | ✅ |
+| Token & cost analytics | some | ✅ | ✅ |
+| **Pickup Briefs** — AI "where you left off" + ready-to-paste next prompt | — | — | ✅ |
+| **Deep search** inside every conversation, with snippets | — | — | ✅ |
+| **Project Journals** — cross-session changelog per repo, exportable | — | — | ✅ |
+| **Efficiency insights** — cache hit-rate coaching, cost per active hour | — | — | ✅ |
+| Native macOS app (no Electron) | rare | — | ✅ |
+| Time-spent tracking from transcripts | — | — | ✅ |
+
+## The signature features
+
+### ⏮ Pickup Briefs
+
+The feature the app is named for. One click generates a brief for any session:
+**State** (what was done, what was mid-flight), **Open threads** (unresolved bugs, deferred
+TODOs), and a **ready-to-paste Next Prompt** that drops you back into productive work — no
+re-reading a 60-message transcript to remember what you were doing.
+
+### 🔎 Deep transcript search
+
+Search *inside* the conversations, not just the titles. "Which session did I fix that CORS bug
+in?" — highlighted snippets across hundreds of megabytes of transcripts, grouped by session.
+
+### 📖 Project Journals
+
+Every project gets an auto-stitched timeline of all its sessions — what happened, how long it
+took, what it cost — readable like a changelog and exportable as Markdown.
+
+### 📊 Insights
+
+Time spent per day, tokens and estimated cost (API-equivalent) with 7/30/90-day and custom
+ranges, per-model and per-project breakdowns, an hour-of-day rhythm chart — plus plain-language
+efficiency insights like your prompt-cache hit rate and what it's saving you.
+
+<div align="center">
+<img src="docs/mac-insights.png" alt="Insights dashboard" width="900">
+</div>
+
+And the essentials are all there: sessions grouped by project with your custom `/rename` names
+front and center, live "running now" detection, AI summaries, one-click **Resume in Terminal**,
+copyable resume commands, and a conversation preview.
+
+## 🖥 macOS app
+
+Native SwiftUI — no Electron, no web view. Warm charcoal/cream design with light & dark mode.
 
 ```sh
+git clone https://github.com/SXD390/reprise.git && cd reprise
 ./scripts/build_app.sh
-open "dist/Claude Sessions.app"        # or drag it into /Applications
+open "dist/Reprise.app"        # drag into /Applications to keep it
 ```
 
-For development: `swift run ClaudeSessions`.
+Requires macOS 14+ and Xcode command-line tools.
 
-### Headless checks
+## 🌐 Web app (Windows · Linux · macOS)
+
+The same product as a local web dashboard — one file server, **zero npm dependencies**, no build
+step, bound strictly to `127.0.0.1`.
 
 ```sh
-.build/debug/ClaudeSessions --scan-test               # parse all transcripts, print stats
-.build/debug/ClaudeSessions --summary-test <id-prefix> # test AI summary generation
+./web/start.sh                  # macOS / Linux
 ```
+
+```bat
+web\"Start Reprise.bat"         :: Windows — or just double-click it
+```
+
+Then open <http://127.0.0.1:4747>. Requires Node 18+. `/` to search, `↑↓` to navigate,
+`R` to resume, `C` to copy the resume command.
+
+<div align="center">
+<img src="docs/web-overview.png" alt="Reprise web dashboard" width="900">
+</div>
 
 ## How it works
 
 | Source | Used for |
 |---|---|
-| `~/.claude/projects/*/<uuid>.jsonl` | session metadata: custom/AI titles, first prompt, timestamps, message counts, project path, git branch, model |
-| `~/.claude/sessions/*.json` | live sessions (PID checked with `kill(pid, 0)`) |
-| `claude -p --model haiku` | on-demand summaries (run in an excluded working dir so summary runs never appear as sessions) |
+| `~/.claude/projects/*/<uuid>.jsonl` | sessions, titles (your `/rename` names > AI titles > first prompt), messages, per-message token usage |
+| `~/.claude/sessions/*.json` | live "running now" detection (PID-checked) |
+| `claude -p` (your own CLI) | AI summaries & Pickup Briefs, generated on demand and cached |
 
-Caches live in `~/Library/Application Support/ClaudeSessions/` (`meta-cache.json`, `summaries.json`, generated `resume/*.command` files).
+- **Everything stays on your machine.** No cloud, no accounts, no telemetry, no external
+  requests — the web server refuses non-localhost connections.
+- **Read-only** over `~/.claude` — Reprise never modifies your Claude Code data.
+- **Fast**: transcripts are parsed in parallel and cached by file mtime, so token counts are
+  deduplicated correctly (streaming writes duplicate usage lines — Reprise accounts for that)
+  and relaunches are instant.
+- **Costs are estimates.** Reprise prices tokens at published API rates ("API-equivalent").
+  If you're on a Claude subscription, it shows what your usage *would have cost* — a measure
+  of value, not a bill.
 
-The app is read-only with respect to your Claude Code data — it never modifies anything under `~/.claude`.
+## Development
+
+```sh
+swift run ClaudeSessions                     # run the mac app from source
+node web/server.js                           # run the web server
+.build/debug/ClaudeSessions --scan-test      # headless: parse all transcripts, print stats
+.build/debug/ClaudeSessions --usage-test     # headless: analytics engine check
+.build/debug/ClaudeSessions --brief-test <id-prefix>   # headless: live Pickup Brief test
+```
+
+## License
+
+[MIT](LICENSE) © Sudarshan Venkatesh
+
+Reprise is an independent open-source project, not affiliated with or endorsed by Anthropic.
+"Claude" and "Claude Code" are trademarks of Anthropic, PBC.
