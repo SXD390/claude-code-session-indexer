@@ -64,6 +64,7 @@ const APP_DATA_DIR = path.join(appDataRoot(), 'claude-sessions');
 const SUMMARY_WORK_DIR = path.join(APP_DATA_DIR, 'summary-runs');
 const SUMMARIES_FILE = path.join(APP_DATA_DIR, 'summaries.json');
 const BRIEFS_FILE = path.join(APP_DATA_DIR, 'briefs.json');
+const HANDOFFS_FILE = path.join(APP_DATA_DIR, 'handoffs.json');
 const RESUME_DIR = path.join(APP_DATA_DIR, 'resume');
 
 // ---------------------------------------------------------------------------
@@ -133,6 +134,7 @@ const metaCache = new Map();      // filePath -> { mtimeMs, size, meta }  (meta.
 const sessionIndex = new Map();   // sessionId -> filePath
 let summaries = loadSummaries();  // sessionId -> { text, generatedAt }
 let briefs = loadBriefs();        // sessionId -> { state, open, nextPrompt, generatedAt, sessionLastActivity }
+let handoffs = loadHandoffs();    // sessionId -> { progress, claudeSection, kickstart, raw, generatedAt, sessionLastActivity, cwd, project }
 let hasScannedOnce = false;
 
 function loadSummaries() {
@@ -169,6 +171,24 @@ function saveBriefs() {
     fs.writeFileSync(BRIEFS_FILE, JSON.stringify(briefs, null, 2));
   } catch (e) {
     console.error('[claude-sessions] Failed to persist briefs:', e.message);
+  }
+}
+
+function loadHandoffs() {
+  try {
+    const obj = JSON.parse(fs.readFileSync(HANDOFFS_FILE, 'utf8'));
+    return obj && typeof obj === 'object' ? obj : {};
+  } catch (_) {
+    return {};
+  }
+}
+
+function saveHandoffs() {
+  ensureDir(APP_DATA_DIR);
+  try {
+    fs.writeFileSync(HANDOFFS_FILE, JSON.stringify(handoffs, null, 2));
+  } catch (e) {
+    console.error('[claude-sessions] Failed to persist handoffs:', e.message);
   }
 }
 
@@ -725,6 +745,7 @@ function resumeCommandFor(meta) {
 function toApiSession(meta, active) {
   const stored = summaries[meta.sessionId];
   const brief = briefs[meta.sessionId] || null;
+  const handoff = handoffs[meta.sessionId] || null;
   const ut = meta.usage ? meta.usage.totals : null;
   const usage = ut
     ? { tokens: { input: ut.input, output: ut.output, cacheRead: ut.cacheRead, cacheWrite: ut.cacheWrite }, cost: ut.cost, activeSeconds: ut.activeSeconds }
@@ -751,6 +772,11 @@ function toApiSession(meta, active) {
     usage,
     brief: brief
       ? { state: brief.state, open: brief.open || [], nextPrompt: brief.nextPrompt, generatedAt: brief.generatedAt, sessionLastActivity: brief.sessionLastActivity || null }
+      : null,
+    // Light stub only — the full handoff content is lazy-loaded via GET /handoff so
+    // the /api/sessions payload stays lean.
+    handoff: handoff
+      ? { generatedAt: handoff.generatedAt, sessionLastActivity: handoff.sessionLastActivity || null, hasClaudeSection: !!handoff.claudeSection }
       : null,
     resumeCommand: resumeCommandFor(meta),
   };
@@ -1021,6 +1047,218 @@ async function generateBrief(meta) {
 }
 
 // ---------------------------------------------------------------------------
+// Handoff generation (writes PROGRESS.md / CLAUDE.md into the session's cwd so a
+// brand-new Claude Code session can pick up the old session's work)
+// ---------------------------------------------------------------------------
+
+// Markers that fence the block we own inside a project's CLAUDE.md, so repeated
+// writes replace-in-place instead of piling up duplicates.
+const HANDOFF_CLAUDE_START = '<!-- session-indexer:handoff:start -->';
+const HANDOFF_CLAUDE_END = '<!-- session-indexer:handoff:end -->';
+
+// The model must return EXACTLY this delimited shape; we split it into three parts.
+function handoffInstruction(dateStr) {
+  return (
+    'The stdin contains the tail of a Claude Code CLI coding session transcript. ' +
+    'Produce a HANDOFF so a brand-new Claude Code session can pick up this work. ' +
+    'Base everything strictly on the transcript — do not invent facts. ' +
+    'Output EXACTLY the following, with these literal delimiter lines, and nothing before or after:\n' +
+    '===PROGRESS===\n' +
+    'A dated progress section in GitHub-flavored markdown. Its first line MUST be exactly:\n' +
+    '## ' + dateStr + ' — <short session title>\n' +
+    'Then these subsections in order, each a bold label on its own line followed by bullet points (lines starting with "- "):\n' +
+    '**Done**\n**In progress**\n**Open threads**\n**Key decisions**\n**Files touched**\n**How to verify**\n' +
+    'Under any subsection with nothing to report, write a single "- none" bullet. Keep bullets concise.\n' +
+    '===CLAUDE===\n' +
+    'Durable project knowledge for FUTURE Claude sessions in this repo: build / run / test commands actually observed in the transcript, ' +
+    'project structure, conventions, and gotchas. This is NOT session status — no dates, no to-dos, no "we did X". ' +
+    'If there is nothing durable and reusable to record, output exactly NONE and nothing else in this part.\n' +
+    '===KICKSTART===\n' +
+    'A single ready-to-paste prompt of 3 to 6 sentences (imperative, self-contained) for a fresh Claude Code session: ' +
+    'tell it to read PROGRESS.md and CLAUDE.md in this directory, state the immediate goal drawn from the open threads, ' +
+    'and say how to verify success.\n' +
+    '===END==='
+  );
+}
+
+// Titles + first prompt + last ~50 user/assistant messages (each truncated to
+// 500 chars) + file paths mentioned in the final assistant message. ~16KB cap.
+async function buildHandoffExcerpt(meta) {
+  const messages = await extractPreview(meta.transcriptPath, 1000, 2000);
+  if (!messages.length) return '';
+
+  const parts = [];
+  parts.push('Project: ' + projectDisplayName(meta));
+  if (meta.cwd) parts.push('Project directory: ' + meta.cwd);
+  if (meta.gitBranch) parts.push('Git branch: ' + meta.gitBranch);
+  if (meta.customTitle) parts.push('Session name: ' + meta.customTitle);
+  if (meta.aiTitle) parts.push('Session title: ' + meta.aiTitle);
+  const first = messages.find((m) => m.role === 'user');
+  if (first) parts.push('First prompt: ' + first.text.slice(0, 500));
+
+  parts.push('--- LAST 50 MESSAGES ---');
+  for (const m of messages.slice(-50)) {
+    parts.push((m.role === 'user' ? 'USER: ' : 'ASSISTANT: ') + m.text.slice(0, 500));
+  }
+
+  let lastAssistant = null;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].role === 'assistant') { lastAssistant = messages[i]; break; }
+  }
+  if (lastAssistant) {
+    const paths = (lastAssistant.text.match(/[A-Za-z0-9_./~-]*\/[A-Za-z0-9_./~-]+\.[A-Za-z0-9]{1,6}/g) || [])
+      .concat(lastAssistant.text.match(/\b[A-Za-z0-9_-]+\.(?:swift|js|ts|tsx|jsx|py|go|rs|java|rb|css|html|json|md|sh|yml|yaml|c|cpp|h)\b/g) || []);
+    const uniq = Array.from(new Set(paths)).slice(0, 12);
+    if (uniq.length) parts.push('Files referenced: ' + uniq.join(', '));
+  }
+
+  let out = parts.join('\n');
+  if (out.length > 16000) out = out.slice(0, 16000);
+  return out;
+}
+
+// Split the model's response into PROGRESS / CLAUDE / KICKSTART parts. A CLAUDE
+// part of exactly "NONE" (nothing durable) becomes null.
+function parseHandoff(raw) {
+  const markers = [
+    ['progress', /===\s*PROGRESS\s*===/i],
+    ['claude', /===\s*CLAUDE\s*===/i],
+    ['kickstart', /===\s*KICKSTART\s*===/i],
+    ['end', /===\s*END\s*===/i],
+  ];
+  const found = [];
+  for (const [key, re] of markers) { const m = raw.match(re); if (m) found.push({ key, start: m.index, after: m.index + m[0].length }); }
+  found.sort((a, b) => a.start - b.start);
+  const sec = {};
+  for (let i = 0; i < found.length; i++) {
+    const cur = found[i], next = found[i + 1];
+    sec[cur.key] = raw.slice(cur.after, next ? next.start : raw.length).trim();
+  }
+  const progress = (sec.progress || '').trim();
+  let claudeSection = (sec.claude || '').trim();
+  if (!claudeSection || /^none[.!]?$/i.test(claudeSection)) claudeSection = null;
+  const kickstart = (sec.kickstart || '').trim();
+  return { progress, claudeSection, kickstart };
+}
+
+async function generateHandoff(meta) {
+  const excerpt = await buildHandoffExcerpt(meta);
+  if (!excerpt) {
+    const err = new Error('This session has no conversation content to hand off.');
+    err.code = 'EMPTY_TRANSCRIPT';
+    throw err;
+  }
+  const dateStr = new Date().toISOString().slice(0, 10);
+  const raw = await runClaude(handoffInstruction(dateStr), excerpt);
+  const parsed = parseHandoff(raw);
+  if (!parsed.progress) {
+    const err = new Error('The model did not return a usable handoff. Try Regenerate.');
+    err.code = 'PARSE_FAILED';
+    throw err;
+  }
+  return {
+    progress: parsed.progress,
+    claudeSection: parsed.claudeSection,
+    kickstart: parsed.kickstart,
+    raw,
+    generatedAt: new Date().toISOString(),
+  };
+}
+
+// Fresh filesystem snapshot of the session's project dir (never trusts the client).
+async function handoffFsInfo(meta) {
+  const cwd = meta.cwd || null;
+  let cwdExists = false, claudeMdExists = false, progressMdExists = false;
+  if (cwd) {
+    try { const st = await fsp.stat(cwd); cwdExists = st.isDirectory(); } catch (_) { cwdExists = false; }
+    if (cwdExists) {
+      try { await fsp.stat(path.join(cwd, 'CLAUDE.md')); claudeMdExists = true; } catch (_) {}
+      try { await fsp.stat(path.join(cwd, 'PROGRESS.md')); progressMdExists = true; } catch (_) {}
+    }
+  }
+  return { cwd, cwdExists, claudeMdExists, progressMdExists };
+}
+
+// Insert a new dated section into an existing PROGRESS.md: right after a leading
+// "# " title line if there is one, else at the very top. Never deletes content.
+function insertProgressSection(existing, section) {
+  const sec = section.trim();
+  const lines = existing.replace(/\r\n/g, '\n').split('\n');
+  let idx = 0;
+  while (idx < lines.length && lines[idx].trim() === '') idx++;
+  const insertAt = (idx < lines.length && /^#\s+/.test(lines[idx])) ? idx + 1 : 0;
+  const head = lines.slice(0, insertAt);
+  const tail = lines.slice(insertAt);
+  const merged = head.concat(['', ...sec.split('\n'), ''], tail);
+  let out = merged.join('\n').replace(/\n{3,}/g, '\n\n');
+  if (!out.endsWith('\n')) out += '\n';
+  return out;
+}
+
+// Add or replace our fenced block inside an existing CLAUDE.md. If our markers are
+// already present, replace only what's between them (idempotent); otherwise append.
+function upsertClaudeBlock(existing, block) {
+  const s = existing.indexOf(HANDOFF_CLAUDE_START);
+  const e = existing.indexOf(HANDOFF_CLAUDE_END);
+  if (s !== -1 && e !== -1 && e > s) {
+    return existing.slice(0, s) + block + existing.slice(e + HANDOFF_CLAUDE_END.length);
+  }
+  let out = existing;
+  if (!out.endsWith('\n')) out += '\n';
+  out += '\n' + block + '\n';
+  return out;
+}
+
+// Write PROGRESS.md (always) and CLAUDE.md (when asked) into the session's cwd.
+// Target dir + filenames are entirely server-derived — the client supplies no path.
+async function writeHandoff(meta, record, includeClaudeMd) {
+  const cwd = meta.cwd;
+  if (!cwd) {
+    const e = new Error('This session has no recorded project directory, so files cannot be written.');
+    e.code = 'CWD_MISSING';
+    throw e;
+  }
+  let st;
+  try { st = await fsp.stat(cwd); } catch (_) {
+    const e = new Error("The session's project directory no longer exists: " + cwd);
+    e.code = 'CWD_MISSING';
+    throw e;
+  }
+  if (!st.isDirectory()) {
+    const e = new Error("The session's project path is not a directory: " + cwd);
+    e.code = 'CWD_MISSING';
+    throw e;
+  }
+
+  const written = [];
+  const project = projectDisplayName(meta);
+
+  // --- PROGRESS.md (always) ---
+  const progressPath = path.join(cwd, 'PROGRESS.md');
+  const section = (record.progress || '').trim();
+  let existing = null;
+  try { existing = await fsp.readFile(progressPath, 'utf8'); } catch (_) { existing = null; }
+  const progressContent = (existing == null)
+    ? '# Progress — ' + project + '\n\n' + section + '\n'
+    : insertProgressSection(existing, section);
+  await fsp.writeFile(progressPath, progressContent);
+  written.push(progressPath);
+
+  // --- CLAUDE.md (opt-in, only when there's durable content) ---
+  if (includeClaudeMd && record.claudeSection) {
+    const claudePath = path.join(cwd, 'CLAUDE.md');
+    const block = HANDOFF_CLAUDE_START + '\n' + record.claudeSection.trim() + '\n' + HANDOFF_CLAUDE_END;
+    let cExisting = null;
+    try { cExisting = await fsp.readFile(claudePath, 'utf8'); } catch (_) { cExisting = null; }
+    const claudeContent = (cExisting == null) ? block + '\n' : upsertClaudeBlock(cExisting, block);
+    await fsp.writeFile(claudePath, claudeContent);
+    written.push(claudePath);
+  }
+
+  return written;
+}
+
+// ---------------------------------------------------------------------------
 // Deep transcript search (scans user/assistant text, stream-read, capped)
 // ---------------------------------------------------------------------------
 
@@ -1280,6 +1518,55 @@ const server = http.createServer(async (req, res) => {
         return sendJson(res, 200, briefs[id]);
       } catch (e) {
         console.error('[reprise] Brief failed:', e.message);
+        return sendJson(res, 500, { error: e.message, code: e.code || 'ERROR' });
+      }
+    }
+
+    // Write files into the session's project dir. Match BEFORE /handoff so the
+    // trailing "/write" segment isn't misrouted.
+    const handoffWriteMatch = pathname.match(/^\/api\/sessions\/([^/]+)\/handoff\/write$/);
+    if (handoffWriteMatch && method === 'POST') {
+      const id = handoffWriteMatch[1];
+      const meta = await getSessionMeta(id);
+      if (!meta) return sendJson(res, 404, { error: 'Session not found' });
+      const record = handoffs[id];
+      if (!record) return sendJson(res, 400, { error: 'Generate a handoff first.', code: 'NO_HANDOFF' });
+      let body = {};
+      try { body = JSON.parse((await readBody(req)) || '{}'); } catch (_) { body = {}; }
+      const includeClaudeMd = body.includeClaudeMd === true;
+      try {
+        const written = await writeHandoff(meta, record, includeClaudeMd);
+        return sendJson(res, 200, { written });
+      } catch (e) {
+        console.error('[claude-sessions] Handoff write failed:', e.message);
+        const status = (e.code === 'CWD_MISSING') ? 400 : 500;
+        return sendJson(res, status, { error: e.message, code: e.code || 'ERROR' });
+      }
+    }
+
+    const handoffMatch = pathname.match(/^\/api\/sessions\/([^/]+)\/handoff$/);
+    if (handoffMatch && (method === 'POST' || method === 'GET')) {
+      const id = handoffMatch[1];
+      const meta = await getSessionMeta(id);
+      if (!meta) return sendJson(res, 404, { error: 'Session not found' });
+      if (method === 'GET') {
+        const h = handoffs[id];
+        if (!h) return sendJson(res, 404, { error: 'No handoff yet' });
+        const fsInfo = await handoffFsInfo(meta);
+        return sendJson(res, 200, Object.assign({}, h, fsInfo));
+      }
+      try {
+        const handoff = await generateHandoff(meta);
+        handoffs[id] = Object.assign({}, handoff, {
+          sessionLastActivity: meta.lastActivityAt,
+          cwd: meta.cwd,
+          project: projectDisplayName(meta),
+        });
+        saveHandoffs();
+        const fsInfo = await handoffFsInfo(meta);
+        return sendJson(res, 200, Object.assign({}, handoffs[id], fsInfo));
+      } catch (e) {
+        console.error('[claude-sessions] Handoff failed:', e.message);
         return sendJson(res, 500, { error: e.message, code: e.code || 'ERROR' });
       }
     }

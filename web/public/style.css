@@ -747,6 +747,37 @@ svg.ic { width: 15px; height: 15px; flex: none; }
 .brief-meta { font-size: 11px; color: var(--text-faint); margin-top: 12px; display: flex; align-items: center; gap: 6px; }
 .brief-meta svg.ic { width: 12px; height: 12px; }
 
+/* ---- Handoff card (detail) ---- */
+.handoff-card { background: linear-gradient(180deg, var(--accent-soft), transparent 60%), var(--surface); border: 1px solid var(--accent-line); border-radius: var(--r-lg); padding: 18px; }
+.ho-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 4px; }
+.ho-title { display: flex; align-items: center; gap: 9px; font-size: 13px; font-weight: 650; }
+.ho-title .spark { width: 22px; height: 22px; border-radius: 7px; background: var(--accent-grad); display: grid; place-items: center; box-shadow: 0 4px 12px rgba(184,84,51,0.35); }
+.ho-title .spark span { width: 13px; height: 13px; color: #fff; }
+.ho-empty { font-size: 12.5px; color: var(--text-dim); line-height: 1.55; padding: 8px 0 2px; max-width: 440px; }
+.ho-empty b { color: var(--text); font-weight: 650; }
+.ho-target { display: flex; align-items: center; gap: 7px; font-size: 11.5px; color: var(--text-dim); margin-top: 14px; }
+.ho-target svg.ic { width: 13px; height: 13px; color: var(--text-faint); flex: none; }
+.ho-target code { font-family: var(--font-mono); font-size: 11px; color: var(--text); background: var(--surface-3); border: 1px solid var(--border); padding: 2px 7px; border-radius: 6px; overflow-wrap: anywhere; }
+.ho-sec { margin-top: 15px; }
+.ho-sec-h { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 7px; }
+.ho-sec-h .ho-fname { font-family: var(--font-mono); font-size: 11px; font-weight: 650; letter-spacing: 0.02em; color: var(--text); }
+.ho-sec-h .ho-flag { font-size: 10px; font-weight: 600; letter-spacing: 0.03em; text-transform: uppercase; color: var(--accent-1); background: var(--accent-soft); border: 1px solid var(--accent-line); padding: 3px 8px; border-radius: 20px; white-space: nowrap; }
+.ho-pre {
+  font-family: var(--font-mono); font-size: 11.5px; line-height: 1.6; color: var(--text);
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--r-md);
+  padding: 12px 13px; margin: 0; max-height: 220px; overflow: auto; white-space: pre-wrap; word-break: break-word;
+}
+.ho-check { display: flex; align-items: center; gap: 8px; margin-top: 11px; font-size: 12.5px; color: var(--text); cursor: pointer; user-select: none; }
+.ho-check input { width: 15px; height: 15px; accent-color: var(--accent-2); flex: none; cursor: pointer; }
+.ho-check-note { font-size: 11px; color: var(--text-faint); margin-top: 4px; margin-left: 23px; }
+.ho-written { display: flex; align-items: flex-start; gap: 9px; margin-top: 15px; padding: 11px 13px; border-radius: var(--r-md); background: rgba(89,194,126,0.10); border: 1px solid rgba(89,194,126,0.30); }
+.ho-written svg.ic { width: 15px; height: 15px; color: var(--running); flex: none; margin-top: 1px; }
+.ho-written-h { font-size: 12px; font-weight: 650; color: var(--running); margin-bottom: 5px; }
+.ho-written-body { min-width: 0; }
+.ho-path { font-family: var(--font-mono); font-size: 11px; color: var(--text-dim); overflow-wrap: anywhere; margin-top: 2px; }
+.ho-actions { display: flex; gap: 10px; margin-top: 16px; flex-wrap: wrap; }
+.ho-actions .btn .spinner { border-color: rgba(255,255,255,0.4); border-top-color: #fff; }
+
 /* ---- per-session Usage card (detail) ---- */
 .usage-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-lg); padding: 16px 18px; }
 .usage-tokens { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px; background: var(--border); border: 1px solid var(--border); border-radius: var(--r-md); overflow: hidden; }

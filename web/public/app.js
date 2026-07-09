@@ -167,6 +167,12 @@
     briefing: {},            // sessionId -> bool
     briefErr: {},
     usageDetail: {},         // sessionId -> per-session usage record
+    handoffs: {},            // sessionId -> full handoff record (progress/claudeSection/kickstart + fs info)
+    handoffLoading: {},      // sessionId -> bool (generating)
+    handoffWriting: {},      // sessionId -> bool (writing files)
+    handoffErr: {},          // sessionId -> error string
+    handoffWritten: {},      // sessionId -> written path list
+    includeClaudeMd: {},     // sessionId -> checkbox state
   };
 
   // ---- DOM refs ----
@@ -524,6 +530,10 @@
       </div>
 
       <div class="d-section">
+        <div class="handoff-card" id="handoffCard">${handoffCardHTML(s)}</div>
+      </div>
+
+      <div class="d-section">
         <div class="summary-card" id="summaryCard">
           <div class="sc-head">
             <div class="sc-title"><span class="spark"><span>${icon('sparkles')}</span></span> AI Summary</div>
@@ -571,6 +581,8 @@
     $('#resumeBtn').addEventListener('click', () => resume(s.sessionId));
     $('#genSummaryBtn').addEventListener('click', () => genSummary(s.sessionId));
     wireBrief(s);
+    wireHandoff(s);
+    loadHandoff(s);
     loadUsageCard(s);
   }
 
@@ -648,6 +660,187 @@
       state.briefErr[id] = e.message;
       status('Brief failed', 'err');
       if (state.selectedId === id && s) { $('#briefCard').innerHTML = briefCardHTML(s); hydrateIcons($('#briefCard')); wireBrief(s); }
+    }
+  }
+
+  // ---- Handoff card ----
+  function handoffStale(s, record) {
+    const gen = Date.parse((record && record.generatedAt) || (s.handoff && s.handoff.generatedAt)) || 0;
+    const act = Date.parse(s.lastActivityAt) || 0;
+    return gen > 0 && act - gen > 60000; // >1 min newer
+  }
+  function handoffHead() {
+    return `<div class="ho-head">
+      <div class="ho-title"><span class="spark"><span>${icon('package')}</span></span> Handoff</div>
+    </div>`;
+  }
+  function handoffCardHTML(s) {
+    const id = s.sessionId;
+    const head = handoffHead();
+
+    if (state.handoffLoading[id]) {
+      return head + `<div class="sc-loading"><span class="spinner"></span><span>Packaging this session with <b>claude&nbsp;·&nbsp;haiku</b><span class="sc-dots"><span></span><span></span><span></span></span></span></div>`;
+    }
+
+    const record = state.handoffs[id];
+    if (!record) {
+      // A server-side handoff exists but hasn't been fetched into the client yet.
+      if (s.handoff) return head + `<div class="sc-loading"><span class="spinner"></span><span>Loading saved handoff…</span></div>`;
+      const err = state.handoffErr[id];
+      return head
+        + (err ? `<div class="sc-error" style="margin-top:8px">${esc(err)}</div>` : '')
+        + `<div class="ho-empty">Package this session's work so a fresh Claude Code session can pick it up — a dated <b>PROGRESS.md</b> entry, durable notes for <b>CLAUDE.md</b>, and a ready-to-paste kickstart prompt, written into the project directory.</div>
+        <div class="ho-actions"><button class="btn btn-primary" id="hoPrepBtn">${icon('package')} Prepare Handoff</button></div>`;
+    }
+
+    // --- generated ---
+    let html = head;
+    const err = state.handoffErr[id];
+    if (err) html += `<div class="sc-error" style="margin-top:8px">${esc(err)}</div>`;
+    if (handoffStale(s, record)) {
+      html += `<div class="brief-stale">${icon('clock')}<span>This session has newer activity since the handoff was generated — regenerate to refresh.</span></div>`;
+    }
+
+    const cwd = record.cwd;
+    if (!cwd) {
+      html += `<div class="sc-error" style="margin-top:12px">This session has no recorded project directory, so files can't be written.</div>`;
+    } else {
+      html += `<div class="ho-target">${icon('folder')}<span>Writes into <code>${esc(cwd)}</code></span></div>`;
+      if (record.cwdExists === false) {
+        html += `<div class="sc-error" style="margin-top:8px">That directory was not found on disk — regenerate from a session whose project still exists.</div>`;
+      }
+    }
+
+    // PROGRESS.md preview
+    html += `<div class="ho-sec">
+      <div class="ho-sec-h"><span class="ho-fname">PROGRESS.md</span><span class="ho-flag">${record.progressMdExists ? 'inserts a new dated section' : 'creates the file'}</span></div>
+      <pre class="ho-pre">${esc(record.progress || '—')}</pre>
+    </div>`;
+
+    // CLAUDE.md preview + toggle (only when durable knowledge exists)
+    if (record.claudeSection) {
+      const checked = state.includeClaudeMd[id];
+      html += `<div class="ho-sec">
+        <div class="ho-sec-h"><span class="ho-fname">CLAUDE.md</span><span class="ho-flag">${record.claudeMdExists ? 'appends a marked section' : 'creates the file'}</span></div>
+        <pre class="ho-pre">${esc(record.claudeSection)}</pre>
+        <label class="ho-check"><input type="checkbox" id="hoClaudeChk" ${checked ? 'checked' : ''} /><span>Also update CLAUDE.md</span></label>
+        <div class="ho-check-note">appends a marked section — never overwrites your file</div>
+      </div>`;
+    }
+
+    // KICKSTART — terminal-style copyable block (same styling as the brief's NEXT PROMPT)
+    if (record.kickstart) {
+      html += `<div class="ho-sec">
+        <div class="ho-sec-h"><span class="ho-fname">Kickstart prompt</span></div>
+        <div class="next-block">
+          <div class="next-bar"><span class="nb-label">ready to paste</span>
+            <button class="next-copy" id="hoKickCopy">${icon('copy')} Copy prompt</button></div>
+          <div class="next-text" id="hoKickText">${esc(record.kickstart)}</div>
+        </div>
+      </div>`;
+    }
+
+    // written success
+    const written = state.handoffWritten[id];
+    if (written && written.length) {
+      html += `<div class="ho-written">${icon('check')}<div class="ho-written-body">
+        <div class="ho-written-h">Written to project</div>
+        ${written.map((p) => `<div class="ho-path">${esc(p)}</div>`).join('')}
+      </div></div>`;
+    }
+
+    const writing = state.handoffWriting[id];
+    const canWrite = !!cwd && record.cwdExists !== false;
+    html += `<div class="ho-actions">
+      <button class="btn btn-primary" id="hoWriteBtn" ${(!canWrite || writing) ? 'disabled' : ''}>${writing ? '<span class="spinner" style="width:14px;height:14px;border-width:2px"></span> Writing…' : icon('download') + ' Write to Project'}</button>
+      <button class="btn btn-ghost" id="hoRegenBtn">${icon('refresh')} Regenerate</button>
+    </div>`;
+    html += `<div class="brief-meta">${icon('clock')}<span>Generated ${esc(relTime(record.generatedAt))}</span></div>`;
+    return html;
+  }
+  function rerenderHandoff(s) {
+    if (!s || state.selectedId !== s.sessionId) return;
+    const card = $('#handoffCard');
+    if (card) { card.innerHTML = handoffCardHTML(s); hydrateIcons(card); wireHandoff(s); }
+  }
+  function wireHandoff(s) {
+    const id = s.sessionId;
+    const prep = $('#hoPrepBtn'); if (prep) prep.addEventListener('click', () => genHandoff(id));
+    const regen = $('#hoRegenBtn'); if (regen) regen.addEventListener('click', () => genHandoff(id));
+    const write = $('#hoWriteBtn'); if (write) write.addEventListener('click', () => writeHandoffFiles(id));
+    const chk = $('#hoClaudeChk'); if (chk) chk.addEventListener('change', (e) => { state.includeClaudeMd[id] = e.target.checked; });
+    const kc = $('#hoKickCopy'); const rec = state.handoffs[id];
+    if (kc && rec) kc.addEventListener('click', (e) => copyText(rec.kickstart, e.currentTarget, 'Kickstart prompt copied'));
+  }
+  async function loadHandoff(s) {
+    const id = s.sessionId;
+    if (state.handoffs[id] || state.handoffLoading[id]) return; // already have it / generating
+    if (!s.handoff) return; // nothing saved server-side
+    try {
+      const r = await fetch('/api/sessions/' + encodeURIComponent(id) + '/handoff', { cache: 'no-store' });
+      if (!r.ok) return;
+      const data = await r.json();
+      state.handoffs[id] = data;
+      if (!(id in state.includeClaudeMd)) state.includeClaudeMd[id] = !data.claudeMdExists;
+      rerenderHandoff(s);
+    } catch (e) { /* leave placeholder */ }
+  }
+  async function genHandoff(id) {
+    if (state.handoffLoading[id]) return;
+    state.handoffLoading[id] = true;
+    state.handoffErr[id] = null;
+    state.handoffWritten[id] = null;
+    const s = state.sessions.find((x) => x.sessionId === id);
+    rerenderHandoff(s);
+    status('Preparing handoff via claude CLI…');
+    try {
+      const r = await fetch('/api/sessions/' + encodeURIComponent(id) + '/handoff', { method: 'POST' });
+      const data = await r.json();
+      state.handoffLoading[id] = false;
+      if (!r.ok) throw new Error(data.error || 'Handoff failed');
+      state.handoffs[id] = data;
+      // checked by default ONLY when CLAUDE.md doesn't exist
+      state.includeClaudeMd[id] = !data.claudeMdExists;
+      if (s) s.handoff = { generatedAt: data.generatedAt, sessionLastActivity: data.sessionLastActivity, hasClaudeSection: !!data.claudeSection };
+      status('Handoff ready', 'ok');
+      rerenderHandoff(s);
+    } catch (e) {
+      state.handoffLoading[id] = false;
+      state.handoffErr[id] = e.message;
+      status('Handoff failed', 'err');
+      rerenderHandoff(s);
+    }
+  }
+  async function writeHandoffFiles(id) {
+    if (state.handoffWriting[id]) return;
+    const record = state.handoffs[id];
+    if (!record) return;
+    state.handoffWriting[id] = true;
+    state.handoffErr[id] = null;
+    const s = state.sessions.find((x) => x.sessionId === id);
+    rerenderHandoff(s);
+    const include = !!state.includeClaudeMd[id] && !!record.claudeSection;
+    status('Writing handoff files…');
+    try {
+      const r = await fetch('/api/sessions/' + encodeURIComponent(id) + '/handoff/write', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ includeClaudeMd: include }),
+      });
+      const data = await r.json();
+      state.handoffWriting[id] = false;
+      if (!r.ok) throw new Error(data.error || 'Write failed');
+      state.handoffWritten[id] = data.written || [];
+      // Files now exist on disk — reflect that in the preview flags.
+      record.progressMdExists = true;
+      if (include) record.claudeMdExists = true;
+      status('Handoff written to project', 'ok');
+      rerenderHandoff(s);
+    } catch (e) {
+      state.handoffWriting[id] = false;
+      state.handoffErr[id] = e.message;
+      status('Handoff write failed', 'err');
+      rerenderHandoff(s);
     }
   }
 
