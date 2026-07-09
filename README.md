@@ -16,7 +16,7 @@ Native macOS app · Web dashboard for Windows & Linux · Zero cloud, zero teleme
 
 <img src="docs/mac-detail.png" alt="Session detail with Pickup Brief" width="900">
 
-<sub>All screenshots show generated demo data (`scripts/make_demo_data.py`), not real sessions.</sub>
+<sub>All screenshots show generated demo data, not real sessions.</sub>
 
 </div>
 
@@ -142,8 +142,6 @@ node web/server.js                           # run the web server
 .build/debug/ClaudeSessions --usage-test     # headless: analytics engine check
 .build/debug/ClaudeSessions --brief-test <id-prefix>   # headless: live Pickup Brief test
 .build/debug/ClaudeSessions --handoff-test <id-prefix>  # headless: Handoff generation (no writes)
-python3 scripts/make_demo_data.py                       # fictitious data root for demos
-CSI_CLAUDE_DIR=/tmp/csi-demo-claude node web/server.js  # run either app against it
 ```
 
 ## License
