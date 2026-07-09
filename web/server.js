@@ -22,6 +22,12 @@ const path = require('path');
 const os = require('os');
 const { spawn, execFile } = require('child_process');
 
+// Optional, opt-in SQLite FTS5 search backend. Loading this module is always
+// safe (it does NOT require node:sqlite until CSI_INDEX is enabled AND a search
+// runs). With CSI_INDEX unset, isAvailable() is false and every code path below
+// behaves exactly as before — linear scan, no db, no npm deps.
+const sqliteIndex = require('./lib/index-sqlite.js');
+
 // ---------------------------------------------------------------------------
 // Configuration
 // ---------------------------------------------------------------------------
@@ -1370,7 +1376,26 @@ async function handoffPreview(meta, record, includeClaudeMd) {
 
 const readline = require('readline');
 
+// Public deep-search entry point. When the optional SQLite FTS5 index is opted
+// into (CSI_INDEX=1) AND usable, queries are served from the index; otherwise —
+// and on ANY index error — this transparently falls back to the linear scan.
+// The result shape is identical either way, so HTTP + MCP callers never know.
 async function deepSearch(q) {
+  if (sqliteIndex.isAvailable()) {
+    try {
+      await sqliteIndex.ensureIndex();        // incremental + cheap on re-runs
+      const hit = sqliteIndex.search(q, 200); // null → index not usable
+      if (hit) return hit;
+    } catch (e) {
+      console.error('[claude-sessions] FTS search failed, using linear scan:', e && e.message ? e.message : e);
+    }
+  }
+  return linearDeepSearch(q);
+}
+
+// The original, dependency-free linear scan: streams every transcript line and
+// collects redacted snippets. This is the DEFAULT and the fallback.
+async function linearDeepSearch(q) {
   const needle = q.toLowerCase();
   const MAX_TOTAL = 200, MAX_PER = 8;
   const listing = (await listTranscripts()).sort((a, b) => b.mtimeMs - a.mtimeMs);
@@ -1820,6 +1845,19 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
+// Give the optional FTS index the read-only helpers it needs, without it having
+// to require() this file back (which would be a circular load). Harmless when
+// the index is disabled — none of these are touched unless CSI_INDEX is set.
+sqliteIndex.configure({
+  appDataDir: APP_DATA_DIR,
+  extractPreview,
+  listTranscripts,
+  metaCache,
+  sessionIndex,
+  displayTitle,
+  projectDisplayName,
+});
+
 // Only start listening when run directly (`node server.js`). When required by a
 // test, we export the pure functions instead so they can be exercised without a
 // live port.
@@ -1833,8 +1871,30 @@ if (require.main === module) {
     console.log(`  Projects dir:     ${PROJECTS_DIR}`);
     console.log(`  App data:         ${APP_DATA_DIR}`);
     console.log('  Bound to 127.0.0.1 only — your transcripts stay private.');
+    if (sqliteIndex.isAvailable()) {
+      console.log('  FTS index:        ENABLED (CSI_INDEX) — building…');
+    }
     console.log('  Press Ctrl+C to stop.');
     console.log('');
+
+    // Opt-in only: warm metaCache, then build/refresh the FTS index and report
+    // how many messages it holds. When CSI_INDEX is unset this whole block is
+    // skipped and nothing new is printed.
+    if (sqliteIndex.isAvailable()) {
+      (async () => {
+        try {
+          await scanSessions(); // warm metaCache (titles/projects) before indexing
+          const stats = await sqliteIndex.ensureIndex();
+          if (stats && stats.ok) {
+            console.log(`[claude-sessions] FTS index active: ${stats.total} messages across ${stats.sessions} session(s) (${stats.path || path.join(APP_DATA_DIR, 'index.db')}).`);
+          } else {
+            console.log('[claude-sessions] FTS index unavailable — using linear search.');
+          }
+        } catch (e) {
+          console.error('[claude-sessions] FTS index build failed (using linear search):', e && e.message ? e.message : e);
+        }
+      })();
+    }
   });
 
   server.on('error', (e) => {

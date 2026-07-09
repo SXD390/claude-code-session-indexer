@@ -5,6 +5,9 @@ import SwiftUI
 struct ClaudeSessionsApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     @StateObject private var store = SessionStore()
+    /// Opt-in fast-search toggle (default OFF). Read by `SearchIndex.isEnabled`; when off,
+    /// deep search behaves byte-identically to before and no index.db is ever created.
+    @AppStorage("csiSearchIndexEnabled") private var searchIndexEnabled = false
 
     init() {
         // Headless smoke test: `ClaudeSessions --scan-test` parses everything and exits.
@@ -36,6 +39,12 @@ struct ClaudeSessionsApp: App {
         if let idx = CommandLine.arguments.firstIndex(of: "--handoff-write-test"),
            CommandLine.arguments.count > idx + 1 {
             Self.runHandoffWriteTest(dir: CommandLine.arguments[idx + 1])
+        }
+        // Headless search parity test: `ClaudeSessions --search-test <query>` runs the same
+        // query through BOTH the concurrent scan and the FTS5 index and compares the results.
+        if let idx = CommandLine.arguments.firstIndex(of: "--search-test"),
+           CommandLine.arguments.count > idx + 1 {
+            Self.runSearchTest(query: CommandLine.arguments[idx + 1])
         }
         // Security regression harness — env-gated so it never runs in normal use:
         //   CSI_SECURITY_SELFTEST=1 ClaudeSessions --security-selftest <throwaway-dir>
@@ -146,6 +155,64 @@ struct ClaudeSessionsApp: App {
             if !insideQuote { out.append(ch) }
         }
         return out
+    }
+
+    /// Correctness demo: runs `query` through the concurrent scan and the FTS5 index and prints
+    /// whether they agree. Uses a throwaway DB so it never touches the app's real index.db.
+    private static func runSearchTest(query: String) {
+        let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard q.count >= 3 else { print("query must be ≥ 3 chars"); exit(1) }
+
+        let listing = TranscriptScanner.listTranscripts(excludingProjectPaths: [])
+        let metas = listing.map {
+            TranscriptScanner.parseTranscript(url: $0.url, projectKey: $0.projectKey, mtime: $0.mtime, size: $0.size)
+        }
+        let targets = metas.filter { !$0.isEmpty }
+            .sorted { ($0.lastActivityAt ?? .distantPast) > ($1.lastActivityAt ?? .distantPast) }
+        let metaById = Dictionary(uniqueKeysWithValues: targets.map { ($0.sessionId, $0) })
+        let ordered = targets.map { $0.sessionId }
+
+        // 1) The default concurrent scan.
+        var scanById: [String: [RawDeepMatch]] = [:]
+        for m in targets {
+            scanById[m.sessionId] = TranscriptScanner.deepSearch(
+                url: URL(fileURLWithPath: m.transcriptPath), query: q)
+        }
+        let scanHits = SessionStore.assembleHits(byId: scanById, ordered: ordered, metaById: metaById)
+
+        // 2) The FTS5 index (throwaway DB).
+        let dbURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("csi-search-test-\(UUID().uuidString).db")
+        let idxTargets = targets.map {
+            SearchIndex.Target(sessionId: $0.sessionId, projectKey: $0.projectKey,
+                               transcriptPath: $0.transcriptPath,
+                               mtime: $0.fileModifiedAt ?? .distantPast, size: $0.fileSize)
+        }
+        guard let index = SearchIndex(dbURL: dbURL) else { print("FTS5 unavailable"); exit(1) }
+        let t0 = Date()
+        index.ensureIndex(targets: idxTargets)
+        let buildElapsed = Date().timeIntervalSince(t0)
+        let t1 = Date()
+        guard let ftsById = index.search(query: q) else { print("index search failed"); exit(1) }
+        let ftsElapsed = Date().timeIntervalSince(t1)
+        let ftsHits = SessionStore.assembleHits(byId: ftsById, ordered: ordered, metaById: metaById)
+
+        let scanSessions = Set(scanHits.map(\.sessionId))
+        let ftsSessions = Set(ftsHits.map(\.sessionId))
+
+        print("query: “\(q)”  over \(targets.count) sessions")
+        print("scan : \(scanHits.count) hits in \(scanSessions.count) sessions")
+        print("fts  : \(ftsHits.count) hits in \(ftsSessions.count) sessions  (index build \(String(format: "%.3f", buildElapsed))s, query \(String(format: "%.4f", ftsElapsed))s)")
+        if scanSessions == ftsSessions {
+            print("SESSION SETS MATCH ✓")
+        } else {
+            print("SESSION SETS DIFFER — scan-only: \(scanSessions.subtracting(ftsSessions)) · fts-only: \(ftsSessions.subtracting(scanSessions))")
+        }
+        for h in ftsHits.prefix(6) {
+            print("  • [\(h.projectName)] \(h.sessionTitle) (\(h.role)): \(h.snippet)")
+        }
+        try? FileManager.default.removeItem(at: dbURL)
+        exit(scanSessions == ftsSessions ? 0 : 1)
     }
 
     private static func runUsageTest() {
@@ -373,6 +440,8 @@ struct ClaudeSessionsApp: App {
             CommandGroup(after: .newItem) {
                 Button("Refresh Sessions") { store.refresh() }
                     .keyboardShortcut("r", modifiers: .command)
+                Toggle("Fast Search Index (FTS5)", isOn: $searchIndexEnabled)
+                    .help("Build a local SQLite full-text index so deep search is instant across thousands of sessions. Off by default.")
             }
         }
     }

@@ -13,7 +13,7 @@
   "scripts": {
     "start": "node server.js",
     "mcp": "node mcp-server.js",
-    "test": "node test/unit.mjs && node test/security-smoke.mjs && node test/mcp.mjs"
+    "test": "node test/unit.mjs && node test/security-smoke.mjs && node test/mcp.mjs && node test/index.mjs"
   },
   "dependencies": {}
 }

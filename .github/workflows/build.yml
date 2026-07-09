@@ -46,3 +46,10 @@ jobs:
         # tools/call) against a temp fixture and asserts JSON-RPC framing +
         # that stdout carries ONLY protocol messages (no stray logs).
         run: node web/test/mcp.mjs
+      - name: Optional FTS index test (fallback on Node 20)
+        # The optional SQLite FTS5 search backend is opt-in and requires the
+        # experimental node:sqlite (Node 22.5+). On this Node 20 runner it must
+        # assert the silent-fallback contract (isAvailable()===false, linear
+        # scan still works) and pass as a no-op. On Node 22.5+ it also builds a
+        # real index and asserts FTS parity with the scan. Never installs deps.
+        run: node web/test/index.mjs

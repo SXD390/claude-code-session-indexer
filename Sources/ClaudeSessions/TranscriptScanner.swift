@@ -399,6 +399,67 @@ extension TranscriptScanner {
         return matches
     }
 
+    /// One redacted message row destined for the optional FTS5 search index.
+    /// Mirrors the deep-search/preview filtering rules (skips meta/tool_result/sidechain),
+    /// but keeps the FULL redacted text (no length cap) so the index is faithful to the scan.
+    struct IndexRow {
+        let role: String            // "user" | "assistant"
+        let text: String            // already redacted
+        let timestamp: Date?
+    }
+
+    /// Extracts every user + assistant text message from a transcript, REDACTED, for indexing.
+    /// Reuses the same helpers as the scan so the index sees exactly what deep search would.
+    static func extractIndexRows(url: URL) -> [IndexRow] {
+        guard let data = try? Data(contentsOf: url), !data.isEmpty else { return [] }
+        let content = String(decoding: data, as: UTF8.self)
+        var rows: [IndexRow] = []
+
+        for line in content.split(separator: "\n", omittingEmptySubsequences: true) {
+            if line.contains("\"isSidechain\":true") { continue }
+            let isUser = line.contains("\"type\":\"user\"")
+            let isAssistant = line.contains("\"type\":\"assistant\"")
+            guard isUser || isAssistant else { continue }
+            if isUser && (line.contains("\"isMeta\":true") || line.contains("\"tool_result\"")) { continue }
+
+            guard let obj = decode(line) else { continue }
+            let ts = (obj["timestamp"] as? String).flatMap(parseDate)
+
+            if isUser {
+                guard let t = userText(from: obj), isRealPrompt(t) else { continue }
+                rows.append(IndexRow(role: "user", text: Redaction.redact(t), timestamp: ts))
+            } else {
+                guard let t = assistantText(from: obj), !t.isEmpty else { continue }
+                rows.append(IndexRow(role: "assistant", text: Redaction.redact(t), timestamp: ts))
+            }
+        }
+        return rows
+    }
+
+    /// Builds a redacted ±pad-character snippet around the query inside already-stored text,
+    /// with the SAME shape the scan path produces. Used by the FTS index (whose stored text is
+    /// already redacted; re-redaction here is idempotent). Falls back to a token/leading window
+    /// when the exact phrase isn't a literal substring (FTS matches tokens, not substrings).
+    static func makeSnippet(text: String, query: String, pad: Int = 120) -> String {
+        let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !q.isEmpty, let r = text.range(of: q, options: .caseInsensitive) {
+            return snippet(text, around: r, pad: pad)
+        }
+        for token in q.split(whereSeparator: { !$0.isLetter && !$0.isNumber }) where token.count >= 2 {
+            if let r = text.range(of: String(token), options: .caseInsensitive) {
+                return snippet(text, around: r, pad: pad)
+            }
+        }
+        // Last resort: a leading window (still collapsed + redacted).
+        let end = text.index(text.startIndex, offsetBy: min(text.count, pad * 2))
+        var s = String(text[text.startIndex..<end])
+        s = s.replacingOccurrences(of: "\n", with: " ")
+        while s.contains("  ") { s = s.replacingOccurrences(of: "  ", with: " ") }
+        s = s.trimmingCharacters(in: .whitespaces)
+        if end < text.endIndex { s += "…" }
+        return Redaction.redact(s)
+    }
+
     /// A ±pad-character window around a match, whitespace-collapsed, with ellipses.
     private static func snippet(_ text: String, around range: Range<String.Index>, pad: Int) -> String {
         let start = text.index(range.lowerBound, offsetBy: -pad, limitedBy: text.startIndex) ?? text.startIndex

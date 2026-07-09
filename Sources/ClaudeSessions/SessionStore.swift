@@ -292,7 +292,12 @@ final class SessionStore: ObservableObject {
 
     // MARK: - Deep search
 
-    /// Concurrently scans every non-empty transcript for `query`; cancellable via the task.
+    /// Searches every non-empty transcript for `query`; cancellable via the task.
+    ///
+    /// Prefers the optional FTS5 index when it's enabled AND usable (opt-in via `CSI_INDEX=1`
+    /// or the persisted toggle); otherwise — and on ANY index failure — falls back to the
+    /// existing concurrent linear scan. Both paths return the identical `[DeepSearchHit]` shape,
+    /// so the fallback is invisible to the UI.
     func runDeepSearch(_ query: String) async -> [DeepSearchHit] {
         let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard q.count >= 3 else { return [] }
@@ -305,7 +310,28 @@ final class SessionStore: ObservableObject {
         let metaById = Dictionary(uniqueKeysWithValues: targets.map { ($0.sessionId, $0) })
         let ordered = targets.map { $0.sessionId }
 
-        let hits: [DeepSearchHit] = await withTaskGroup(of: (String, [RawDeepMatch]).self) { group in
+        // Fast path: the opt-in FTS5 index. Any nil (disabled, open/schema/MATCH failure) falls
+        // through to the scan below, so correctness never depends on the index.
+        if SearchIndex.isEnabled, !targets.isEmpty {
+            let indexTargets = targets.map {
+                SearchIndex.Target(sessionId: $0.sessionId, projectKey: $0.projectKey,
+                                   transcriptPath: $0.transcriptPath,
+                                   mtime: $0.fileModifiedAt ?? .distantPast, size: $0.fileSize)
+            }
+            let byId: [String: [RawDeepMatch]]? = await Task.detached(priority: .userInitiated) {
+                guard let index = SearchIndex() else { return nil }
+                index.ensureIndex(targets: indexTargets)   // incremental: only changed transcripts
+                return index.search(query: q)
+            }.value
+
+            if let byId, !Task.isCancelled {
+                deepScanned = targets.count
+                return Self.assembleHits(byId: byId, ordered: ordered, metaById: metaById)
+            }
+        }
+
+        // Default path: concurrent linear scan (byte-identical to the pre-index behavior).
+        let byId: [String: [RawDeepMatch]] = await withTaskGroup(of: (String, [RawDeepMatch]).self) { group in
             let maxConcurrent = max(2, ProcessInfo.processInfo.activeProcessorCount - 1)
             var byId: [String: [RawDeepMatch]] = [:]
             var iterator = targets.makeIterator()
@@ -329,21 +355,28 @@ final class SessionStore: ObservableObject {
                 if Task.isCancelled { group.cancelAll(); break }
                 if addNext(&group) { inFlight += 1 }
             }
-
-            var out: [DeepSearchHit] = []
-            for id in ordered {
-                guard let matches = byId[id], let meta = metaById[id] else { continue }
-                for m in matches {
-                    out.append(DeepSearchHit(
-                        sessionId: id, sessionTitle: meta.displayTitle,
-                        projectKey: meta.projectKey, projectName: meta.projectDisplayName,
-                        role: m.role, snippet: m.snippet, timestamp: m.timestamp))
-                    if out.count >= 200 { return out }
-                }
-            }
-            return out
+            return byId
         }
-        return hits
+        return Self.assembleHits(byId: byId, ordered: ordered, metaById: metaById)
+    }
+
+    /// Resolves per-session raw matches into UI-ready hits, in newest-session order, capped at
+    /// 200. Shared by the scan and index paths so both produce the exact same result shape.
+    nonisolated static func assembleHits(
+        byId: [String: [RawDeepMatch]], ordered: [String], metaById: [String: SessionMeta]
+    ) -> [DeepSearchHit] {
+        var out: [DeepSearchHit] = []
+        for id in ordered {
+            guard let matches = byId[id], let meta = metaById[id] else { continue }
+            for m in matches {
+                out.append(DeepSearchHit(
+                    sessionId: id, sessionTitle: meta.displayTitle,
+                    projectKey: meta.projectKey, projectName: meta.projectDisplayName,
+                    role: m.role, snippet: m.snippet, timestamp: m.timestamp))
+                if out.count >= 200 { return out }
+            }
+        }
+        return out
     }
 
     /// Cheap poll: only re-checks which sessions are currently running.
