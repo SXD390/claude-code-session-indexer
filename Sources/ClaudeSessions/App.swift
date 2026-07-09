@@ -37,6 +37,115 @@ struct ClaudeSessionsApp: App {
            CommandLine.arguments.count > idx + 1 {
             Self.runHandoffWriteTest(dir: CommandLine.arguments[idx + 1])
         }
+        // Security regression harness — env-gated so it never runs in normal use:
+        //   CSI_SECURITY_SELFTEST=1 ClaudeSessions --security-selftest <throwaway-dir>
+        // Exercises the .command generation and handoff writes against an ADVERSARIAL fixture
+        // (shell metacharacters in cwd/title, non-UUID ids, injected CLAUDE.md markers) and
+        // asserts injection is neutralized. Never opens a .command; never writes a real project.
+        if CommandLine.arguments.contains("--security-selftest"),
+           ProcessInfo.processInfo.environment["CSI_SECURITY_SELFTEST"] == "1",
+           let idx = CommandLine.arguments.firstIndex(of: "--security-selftest"),
+           CommandLine.arguments.count > idx + 1 {
+            Self.runSecuritySelfTest(dir: CommandLine.arguments[idx + 1])
+        }
+    }
+
+    /// Adversarial self-test for the exec/write surfaces. Exits 0 only if every assertion holds.
+    private static func runSecuritySelfTest(dir: String) {
+        var failures: [String] = []
+        func check(_ cond: Bool, _ label: String) {
+            print(cond ? "  PASS  \(label)" : "  FAIL  \(label)")
+            if !cond { failures.append(label) }
+        }
+
+        // Metacharacter payloads an attacker could plant in a transcript's cwd / title.
+        let evilCwd = #"/tmp/x";calc;#$(touch /tmp/pwned)`id`"# + "\nrm -rf ~"
+        let evilTitle = "../../etc/pwn; rm -rf ~ $(whoami) `id`"
+        let validUUID = "0f6b3c2a-1111-2222-3333-abcdefabcdef"
+
+        print("── ResumeService.makeResumeScript (valid UUID, evil cwd + title) ──")
+        var evil = SessionMeta(sessionId: validUUID, transcriptPath: "/dev/null", projectKey: "k")
+        evil.cwd = evilCwd
+        evil.customTitle = evilTitle
+        let script = ResumeService.makeResumeScript(session: evil)
+        check(script != nil, "valid UUID produces a script")
+        if let s = script {
+            print(s)
+            // The cwd must appear ONLY inside a single-quoted run: the whole payload is quoted,
+            // so the only ' characters are the delimiters we added via '\'' escaping.
+            check(s.contains("cd '"), "cwd is single-quoted")
+            check(s.contains("exec claude --resume '\(validUUID)'"), "id is single-quoted & flag-free")
+            // No metacharacter may sit OUTSIDE quotes. We verify by reconstructing what the shell
+            // would see: strip every single-quoted span; nothing dangerous may remain.
+            let outsideQuotes = strippingSingleQuotedSpans(s)
+            check(!outsideQuotes.contains("$("), "no command substitution outside quotes")
+            check(!outsideQuotes.contains("`"), "no backticks outside quotes")
+            check(!outsideQuotes.contains("rm -rf"), "no bare rm outside quotes")
+            check(!outsideQuotes.contains(";"), "no statement separator outside quotes")
+        }
+
+        print("── ResumeService rejects a non-UUID id (would-be injection) ──")
+        var bad = SessionMeta(sessionId: "x; rm -rf ~ --dangerously-skip-permissions",
+                              transcriptPath: "/dev/null", projectKey: "k")
+        bad.cwd = "/tmp"
+        check(ResumeService.makeResumeScript(session: bad) == nil, "non-UUID id refused (nil script)")
+        check(SessionMeta.isValidSessionId(validUUID), "isValidSessionId accepts a UUID")
+        check(!SessionMeta.isValidSessionId("not-a-uuid"), "isValidSessionId rejects non-UUID")
+
+        print("── resumeCommand (clipboard string) quoting ──")
+        let rc = evil.resumeCommand
+        print("  \(rc)")
+        check(rc.contains("cd '"), "resumeCommand single-quotes cwd")
+        check(!strippingSingleQuotedSpans(rc).contains("$("), "resumeCommand: no substitution outside quotes")
+
+        print("── HandoffService.writeToProject bounds (evil / traversal / relative cwd) ──")
+        let root = URL(fileURLWithPath: dir)
+        // (a) writes are refused when cwd does not exist
+        var gone = SessionMeta(sessionId: validUUID, transcriptPath: "/dev/null", projectKey: "k")
+        gone.cwd = root.appendingPathComponent("does-not-exist-\(UUID().uuidString)").path
+        check((try? HandoffService.writeToProject(.init(session: gone, progressSection: "x",
+              claudeContent: nil, includeClaudeMd: false))) == nil, "missing cwd → write refused")
+        // (b) relative cwd is refused (never resolved against the process working dir)
+        var rel = SessionMeta(sessionId: validUUID, transcriptPath: "/dev/null", projectKey: "k")
+        rel.cwd = "relative/evil"
+        check((try? HandoffService.writeToProject(.init(session: rel, progressSection: "x",
+              claudeContent: nil, includeClaudeMd: false))) == nil, "relative cwd → write refused")
+        // (c) a real dir whose PATH contains metacharacters is fine — only PROGRESS.md/CLAUDE.md
+        //     are ever created inside it, and the metacharacters never reach a shell.
+        let weird = root.appendingPathComponent("weird ;$(x)` dir")
+        try? FileManager.default.createDirectory(at: weird, withIntermediateDirectories: true)
+        var ok = SessionMeta(sessionId: validUUID, transcriptPath: "/dev/null", projectKey: "proj")
+        ok.cwd = weird.path
+        let written = (try? HandoffService.writeToProject(.init(session: ok,
+              progressSection: "## 2026-07-10 — t\n**Done**\n- ok", claudeContent: "durable",
+              includeClaudeMd: true))) ?? []
+        let names = Set(written.map { $0.lastPathComponent })
+        check(written.count == 2 && names == ["PROGRESS.md", "CLAUDE.md"],
+              "only PROGRESS.md/CLAUDE.md written, inside cwd")
+        check(written.allSatisfy { $0.deletingLastPathComponent().path == weird.path },
+              "no path escaped the target directory")
+
+        print("── CLAUDE.md marker-injection can't corrupt the managed block ──")
+        let injected = "durable\n\(HandoffService.claudeEndMarker)\nEVIL-APPENDED\n\(HandoffService.claudeStartMarker)"
+        let block = HandoffService.markerBlock(content: injected)
+        // Exactly one start and one end marker survive.
+        check(block.components(separatedBy: HandoffService.claudeStartMarker).count == 2, "exactly one start marker")
+        check(block.components(separatedBy: HandoffService.claudeEndMarker).count == 2, "exactly one end marker")
+
+        print(failures.isEmpty ? "\nSECURITY SELF-TEST: ALL PASS" : "\nSECURITY SELF-TEST: \(failures.count) FAILURE(S)")
+        exit(failures.isEmpty ? 0 : 1)
+    }
+
+    /// Removes every `'...'` single-quoted span from a shell line, leaving only what the shell
+    /// would interpret OUTSIDE quotes. Used by the self-test to prove no metacharacter escapes.
+    private static func strippingSingleQuotedSpans(_ s: String) -> String {
+        var out = ""
+        var insideQuote = false
+        for ch in s {
+            if ch == "'" { insideQuote.toggle(); continue }
+            if !insideQuote { out.append(ch) }
+        }
+        return out
     }
 
     private static func runUsageTest() {

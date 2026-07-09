@@ -259,6 +259,14 @@ enum HandoffService {
         guard let cwdPath = req.session.cwd, !cwdPath.isEmpty else {
             throw HandoffError.noProjectDir
         }
+        // SECURITY: cwd is untrusted (transcript-supplied). Require an ABSOLUTE path so it can
+        // never be resolved relative to the process working directory, and require it to be an
+        // EXISTING directory so the write is refused (not silently misdirected) when the project
+        // is gone. Combined with the hardcoded PROGRESS.md/CLAUDE.md filenames below, this bounds
+        // every write to two known files inside a real directory the session actually ran in.
+        guard cwdPath.hasPrefix("/") else {
+            throw HandoffError.projectDirMissing(cwdPath)
+        }
         let dir = URL(fileURLWithPath: cwdPath)
         var isDir: ObjCBool = false
         guard FileManager.default.fileExists(atPath: dir.path, isDirectory: &isDir), isDir.boolValue else {
@@ -334,7 +342,14 @@ enum HandoffService {
     }
 
     static func markerBlock(content: String) -> String {
-        let body = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        // SECURITY: the model's content is influenced by (untrusted) transcript text. If it
+        // contained our own start/end marker comments, a later marker-block replacement in
+        // writeClaudeMd would match the WRONG delimiters and could orphan or clobber text. Strip
+        // any embedded markers so the managed block always has exactly one start and one end.
+        let body = content
+            .replacingOccurrences(of: claudeStartMarker, with: "")
+            .replacingOccurrences(of: claudeEndMarker, with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
         return "\(claudeStartMarker)\n\(body)\n\(claudeEndMarker)"
     }
 }

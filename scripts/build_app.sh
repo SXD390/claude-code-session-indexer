@@ -60,7 +60,18 @@ if [ ! -f "$ROOT/dist/AppIcon.icns" ]; then
 fi
 cp "$ROOT/dist/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
 
-echo "→ codesign (ad-hoc)"
-codesign --force -s - "$APP"
+# Signing. Defaults to ad-hoc ("-") for local use. For a distributable build, export a
+# Developer ID cert name so the app is signed with Hardened Runtime + a secure timestamp — the
+# prerequisites for notarization (see docs/security/macos-audit.md):
+#   CODESIGN_ID="Developer ID Application: Your Name (TEAMID)" scripts/build_app.sh
+# then notarize the bundle with `xcrun notarytool submit` and `xcrun stapler staple`.
+CODESIGN_ID="${CODESIGN_ID:--}"
+if [ "$CODESIGN_ID" = "-" ]; then
+    echo "→ codesign (ad-hoc — local use only, not for distribution)"
+    codesign --force -s - "$APP"
+else
+    echo "→ codesign (Developer ID + Hardened Runtime): $CODESIGN_ID"
+    codesign --force --options runtime --timestamp -s "$CODESIGN_ID" "$APP"
+fi
 
 echo "✓ Built: $APP"

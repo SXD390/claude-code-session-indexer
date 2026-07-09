@@ -40,6 +40,15 @@ struct SessionMeta: Identifiable, Codable, Hashable {
 
     var hasCustomName: Bool { customTitle?.isEmpty == false }
 
+    /// A session id is trustworthy for use in shell scripts, process arguments, or filenames
+    /// ONLY if it is a canonical UUID. Transcript files are named by UUID, so ids are UUIDs by
+    /// construction — but any id that reaches an exec-able surface MUST be re-validated here so a
+    /// hand-edited cache, a crafted `sessions/*.json` descriptor, or a future code path can never
+    /// smuggle shell metacharacters or extra CLI flags. Used by ResumeService and `resumeCommand`.
+    static func isValidSessionId(_ id: String) -> Bool {
+        UUID(uuidString: id) != nil
+    }
+
     var projectDisplayName: String {
         if let cwd, !cwd.isEmpty {
             return URL(fileURLWithPath: cwd).lastPathComponent
@@ -47,12 +56,17 @@ struct SessionMeta: Identifiable, Codable, Hashable {
         return projectKey
     }
 
-    /// Shell command that resumes this session.
+    /// Shell command that resumes this session — shown in the UI and copied to the clipboard for
+    /// the user to paste into a terminal. Both the cwd (untrusted, from the transcript) and the
+    /// id are single-quoted so that, even when pasted by hand, a crafted cwd such as
+    /// `$(rm -rf ~)` or `x";calc;#` is an inert literal rather than an injected command. Double
+    /// quotes were unsafe here because the shell still expands `$`, backticks, and `\` inside them.
     var resumeCommand: String {
+        let id = Shell.singleQuote(sessionId)
         if let cwd, !cwd.isEmpty {
-            return "cd \"\(cwd)\" && claude --resume \(sessionId)"
+            return "cd \(Shell.singleQuote(cwd)) && claude --resume \(id)"
         }
-        return "claude --resume \(sessionId)"
+        return "claude --resume \(id)"
     }
 
     var isEmpty: Bool { userMessageCount == 0 && customTitle == nil }
