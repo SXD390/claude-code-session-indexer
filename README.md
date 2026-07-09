@@ -87,6 +87,8 @@ copyable resume commands, and a conversation preview.
 
 Native SwiftUI — no Electron, no web view. Warm charcoal/cream design with light & dark mode.
 
+**Build from source** (recommended — no Gatekeeper warning):
+
 ```sh
 git clone https://github.com/SXD390/claude-code-session-indexer.git && cd claude-code-session-indexer
 ./scripts/build_app.sh
@@ -94,6 +96,10 @@ open "dist/Claude Code Session Indexer.app"        # drag into /Applications to 
 ```
 
 Requires macOS 14+ and Xcode command-line tools.
+
+**Or download** the [latest release](https://github.com/SXD390/claude-code-session-indexer/releases/latest) `.dmg`.
+It's ad-hoc signed (not yet notarized), so first launch needs a **right-click → Open** or
+`xattr -dr com.apple.quarantine "…/Claude Code Session Indexer.app"`. Checksums are on the release page.
 
 ## 🌐 Web app (Windows · Linux · macOS)
 
