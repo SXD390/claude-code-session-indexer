@@ -75,6 +75,21 @@ Time spent per day, tokens and estimated cost (API-equivalent) with 7/30/90-day 
 ranges, per-model and per-project breakdowns, an hour-of-day rhythm chart — plus plain-language
 efficiency insights like your prompt-cache hit rate and what it's saving you.
 
+### 🔌 MCP server — let Claude Code query its own history
+
+A zero-dependency [MCP](https://modelcontextprotocol.io) server exposes your session history as
+read-only tools, so Claude Code can answer *"what did I decide last week in this repo?"* from
+inside a live session. Register it once:
+
+```sh
+claude mcp add claude-session-indexer --scope user -- \
+  node "$(pwd)/web/mcp-server.js"
+```
+
+Tools: `list_sessions`, `search_sessions`, `get_session`, `get_project_journal`, `get_usage`,
+`get_resume_command`. It's strictly read-only — no file writes, no process spawns — and reuses
+the same parser (and secret redaction) as the rest of the app.
+
 <div align="center">
 <img src="docs/mac-insights.png" alt="Insights dashboard" width="900">
 </div>
