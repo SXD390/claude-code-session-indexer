@@ -1,0 +1,16 @@
+{
+  "name": "claude-sessions-web",
+  "version": "1.0.0",
+  "description": "Local, private web dashboard for browsing, searching, and resuming Claude Code CLI sessions. Zero dependencies, cross-platform (macOS, Windows, Linux).",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  },
+  "bin": {
+    "claude-sessions-web": "server.js"
+  },
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {}
+}

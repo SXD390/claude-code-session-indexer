@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Claude Sessions</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="color-scheme" content="dark light" />
+<meta name="description" content="A local, private dashboard for browsing, searching, and resuming your Claude Code CLI sessions." />
+<link rel="stylesheet" href="/style.css" />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%23E38561'/%3E%3Cstop offset='1' stop-color='%23B85433'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='32' height='32' rx='8' fill='url(%23g)'/%3E%3Cpath d='M9 11h14M9 16h10M9 21h6' stroke='%23fff' stroke-width='2.4' stroke-linecap='round'/%3E%3C/svg%3E" />
+</head>
+<body>
+
+<div id="app" class="app" data-loading="true">
+
+  <!-- ============ SIDEBAR ============ -->
+  <aside class="sidebar" id="sidebar">
+    <div class="brand">
+      <div class="brand-mark" aria-hidden="true">
+        <svg viewBox="0 0 32 32" width="28" height="28"><rect width="32" height="32" rx="8" fill="url(#brandgrad)"/><path d="M9 11h14M9 16h10M9 21h6" stroke="#fff" stroke-width="2.4" stroke-linecap="round"/><defs><linearGradient id="brandgrad" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#E38561"/><stop offset="1" stop-color="#B85433"/></linearGradient></defs></svg>
+      </div>
+      <div class="brand-text">
+        <span class="brand-name">Claude Sessions</span>
+        <span class="brand-sub">Local dashboard</span>
+      </div>
+    </div>
+
+    <nav class="nav-section">
+      <div class="nav-label">Library</div>
+      <button class="nav-item" data-filter="all" data-active="true">
+        <span class="nav-ico" data-ico="layers"></span>
+        <span class="nav-name">All Sessions</span>
+        <span class="nav-count" data-count="all">0</span>
+      </button>
+      <button class="nav-item" data-filter="named">
+        <span class="nav-ico" data-ico="tag"></span>
+        <span class="nav-name">Named</span>
+        <span class="nav-count" data-count="named">0</span>
+      </button>
+      <button class="nav-item" data-filter="running">
+        <span class="nav-ico" data-ico="pulse"></span>
+        <span class="nav-name">Running</span>
+        <span class="nav-count" data-count="running">0</span>
+      </button>
+    </nav>
+
+    <nav class="nav-section nav-projects">
+      <div class="nav-label">Projects</div>
+      <div id="projectList" class="project-list"></div>
+    </nav>
+
+    <div class="sidebar-foot">
+      <button class="ghost-btn" id="themeToggle" title="Toggle theme">
+        <span class="nav-ico" data-ico="theme"></span>
+        <span class="theme-label">Theme</span>
+      </button>
+      <button class="ghost-btn" id="refreshBtn" title="Rescan sessions">
+        <span class="nav-ico" data-ico="refresh"></span>
+      </button>
+    </div>
+  </aside>
+
+  <!-- ============ SESSION LIST ============ -->
+  <section class="list-pane">
+    <header class="list-head">
+      <div class="search-wrap">
+        <span class="search-ico" data-ico="search"></span>
+        <input id="search" class="search" type="text" placeholder="Search sessions…  ( / )" spellcheck="false" autocomplete="off" />
+        <button class="search-clear" id="searchClear" aria-label="Clear" hidden><span data-ico="x"></span></button>
+      </div>
+      <div class="list-toolbar">
+        <div class="list-context" id="listContext">All Sessions</div>
+        <div class="sort-wrap">
+          <button class="sort-btn" id="sortBtn">
+            <span data-ico="sort"></span>
+            <span id="sortLabel">Last activity</span>
+            <span data-ico="chevron"></span>
+          </button>
+          <div class="sort-menu" id="sortMenu" hidden>
+            <button data-sort="activity" data-active="true">Last activity</button>
+            <button data-sort="created">Date created</button>
+            <button data-sort="messages">Most messages</button>
+            <button data-sort="title">Title A–Z</button>
+          </div>
+        </div>
+      </div>
+    </header>
+    <div class="list-scroll" id="listScroll">
+      <div id="skeletonList" class="skeleton-list"></div>
+      <div id="sessionRows" class="session-rows" hidden></div>
+      <div id="listEmpty" class="empty-block" hidden></div>
+    </div>
+  </section>
+
+  <!-- ============ DETAIL ============ -->
+  <section class="detail-pane" id="detailPane">
+    <div id="overview" class="overview"></div>
+    <div id="detail" class="detail" hidden></div>
+  </section>
+
+  <!-- ============ FOOTER HINT BAR ============ -->
+  <footer class="hintbar" id="hintbar">
+    <span class="hint"><kbd>/</kbd> search</span>
+    <span class="hint"><kbd>↑</kbd><kbd>↓</kbd> navigate</span>
+    <span class="hint"><kbd>Enter</kbd> open</span>
+    <span class="hint"><kbd>R</kbd> resume</span>
+    <span class="hint"><kbd>C</kbd> copy command</span>
+    <span class="hint-spacer"></span>
+    <span class="hint" id="statusHint">Ready</span>
+  </footer>
+
+  <button class="mobile-menu-btn" id="mobileMenuBtn" aria-label="Menu"><span data-ico="menu"></span></button>
+</div>
+
+<script src="/app.js"></script>
+</body>
+</html>
