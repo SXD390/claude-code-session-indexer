@@ -8,17 +8,22 @@ on:
 
 jobs:
   macos:
-    name: Swift build (macOS)
+    name: Swift build + security self-test (macOS)
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
       - name: Build
         run: swift build
-      - name: Headless scan self-test
-        run: swift run ClaudeSessions --scan-test || true
+      - name: Adversarial security self-test
+        # Exits non-zero if the resume/.command quoting or handoff-write bounds
+        # ever regress. This is the harness the README/audit rely on — it MUST
+        # be able to fail the build (no `|| true`).
+        env:
+          CSI_SECURITY_SELFTEST: "1"
+        run: swift run ClaudeSessions --security-selftest "$RUNNER_TEMP/sectest"
 
   web:
-    name: Node syntax check
+    name: Node checks + CSRF/header smoke test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -27,3 +32,8 @@ jobs:
           node-version: "20"
       - name: Syntax check (zero dependencies — nothing to install)
         run: node --check web/server.js
+      - name: Web security smoke test
+        # Asserts the localhost defenses (loopback-Host allowlist, Origin check,
+        # X-CSI-Request gate, session-id UUID gate, hardening headers) actually
+        # fire. Fails the build if any regress.
+        run: node web/test/security-smoke.mjs

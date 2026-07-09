@@ -258,3 +258,13 @@ Server log showed **no request errors / stack traces**. Server stopped after tes
 - **Windows resume quoting (W-04)** is the weakest spawn path and relies on `cwd` from a trusted transcript; not remotely reachable. Consider migrating the Windows path off the `cmd /c start "" /D "<cwd>"` string toward a `.cmd` file written with quoting parity to the macOS `.command` approach if Windows becomes a supported target.
 - **Large-transcript CPU/RAM (W-07)** and **CLI spend (W-12)** are accepted; the practical mitigations (1MB body cap, streamed+guarded deep search, same-origin-only reachability, explicit user actions) bound the realistic exposure for a single user.
 - **`X-CSI-Request` header requirement** assumes a modern browser that enforces CORS preflight for custom headers — true for all current browsers. The `Host`/`Origin` allowlist is the primary rebinding defense and does not depend on that assumption.
+
+---
+
+## Verification & provenance
+
+All fixes described above are present in the shipped `web/server.js` on `main`. The W-01/W-02
+defenses landed in commit `92ad2ee`; the W-03 (UUID route gate), W-05 (deep-search line cap), and
+W-06 (hardening headers + CSP) fixes were verified live and committed in `185df77`. Line numbers
+in this report reference the code as of that commit. The CSRF/Host/Origin behavior and the header
+set are re-verified on every push by the security self-test wired into CI (`.github/workflows/build.yml`).
