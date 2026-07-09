@@ -14,7 +14,9 @@ Native macOS app · Web dashboard for Windows & Linux · Zero cloud, zero teleme
 [![Web](https://img.shields.io/badge/Web-Node%2018%2B-333?logo=javascript)](#-web-app-windows--linux--macos)
 [![Dependencies](https://img.shields.io/badge/dependencies-zero-brightgreen)](#)
 
-<img src="docs/mac-detail.png" alt="Claude Code Session Indexer session detail with Pickup Brief" width="900">
+<img src="docs/mac-detail.png" alt="Session detail with Pickup Brief" width="900">
+
+<sub>All screenshots show generated demo data (`scripts/make_demo_data.py`), not real sessions.</sub>
 
 </div>
 
@@ -34,6 +36,7 @@ into flow on work you started days ago.
 | **Pickup Briefs** — AI "where you left off" + ready-to-paste next prompt | — | — | ✅ |
 | **Deep search** inside every conversation, with snippets | — | — | ✅ |
 | **Project Journals** — cross-session changelog per repo, exportable | — | — | ✅ |
+| **Handoff files** — writes PROGRESS.md + CLAUDE.md so the next session picks up the work | — | — | ✅ |
 | **Efficiency insights** — cache hit-rate coaching, cost per active hour | — | — | ✅ |
 | Native macOS app (no Electron) | rare | — | ✅ |
 | Time-spent tracking from transcripts | — | — | ✅ |
@@ -46,6 +49,15 @@ Your fast lane back into flow. One click generates a brief for any session:
 **State** (what was done, what was mid-flight), **Open threads** (unresolved bugs, deferred
 TODOs), and a **ready-to-paste Next Prompt** that drops you back into productive work — no
 re-reading a 60-message transcript to remember what you were doing.
+
+### 🤝 Handoff files
+
+Package a session's work for the *next* session: one click generates a dated **PROGRESS.md**
+section (done / in progress / open threads / key decisions / how to verify) and a durable
+**CLAUDE.md** knowledge block, previews both, and — only after you confirm — writes them into
+that session's project directory. Your existing CLAUDE.md is never overwritten: the indexer
+appends a clearly-marked section and replaces only its own marker block on regeneration.
+A kickstart prompt ties it together so `claude` in a fresh session knows exactly where to begin.
 
 ### 🔎 Deep transcript search
 
@@ -129,6 +141,9 @@ node web/server.js                           # run the web server
 .build/debug/ClaudeSessions --scan-test      # headless: parse all transcripts, print stats
 .build/debug/ClaudeSessions --usage-test     # headless: analytics engine check
 .build/debug/ClaudeSessions --brief-test <id-prefix>   # headless: live Pickup Brief test
+.build/debug/ClaudeSessions --handoff-test <id-prefix>  # headless: Handoff generation (no writes)
+python3 scripts/make_demo_data.py                       # fictitious data root for demos
+CSI_CLAUDE_DIR=/tmp/csi-demo-claude node web/server.js  # run either app against it
 ```
 
 ## License

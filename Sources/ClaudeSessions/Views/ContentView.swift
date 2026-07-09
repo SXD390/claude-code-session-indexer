@@ -2,7 +2,7 @@ import SwiftUI
 
 struct ContentView: View {
     @EnvironmentObject var store: SessionStore
-    @State private var selection: SidebarItem? = .all
+    @State private var selection: SidebarItem? = ProcessInfo.processInfo.environment["CSI_START_VIEW"] == "insights" ? .insights : .all
     @State private var selectedSessionId: String?
     @State private var search = ""
     @AppStorage("sortOrder") private var sortRaw = SortOrder.lastActivity.rawValue
