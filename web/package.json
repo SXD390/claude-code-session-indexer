@@ -7,10 +7,13 @@
     "node": ">=18"
   },
   "bin": {
-    "claude-sessions-web": "server.js"
+    "claude-sessions-web": "server.js",
+    "claude-sessions-mcp": "mcp-server.js"
   },
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "mcp": "node mcp-server.js",
+    "test": "node test/unit.mjs && node test/security-smoke.mjs && node test/mcp.mjs"
   },
   "dependencies": {}
 }

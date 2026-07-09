@@ -33,7 +33,7 @@ jobs:
         with:
           node-version: "20"
       - name: Syntax check (zero dependencies — nothing to install)
-        run: node --check web/server.js
+        run: node --check web/server.js && node --check web/mcp-server.js
       - name: Unit tests
         run: node web/test/unit.mjs
       - name: Web security smoke test
@@ -41,3 +41,8 @@ jobs:
         # X-CSI-Request gate, session-id UUID gate, hardening headers) actually
         # fire. Fails the build if any regress.
         run: node web/test/security-smoke.mjs
+      - name: MCP server test
+        # Drives the read-only MCP stdio server (initialize / tools/list /
+        # tools/call) against a temp fixture and asserts JSON-RPC framing +
+        # that stdout carries ONLY protocol messages (no stray logs).
+        run: node web/test/mcp.mjs

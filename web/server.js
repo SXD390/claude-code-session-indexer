@@ -589,6 +589,18 @@ function aggregateUsage(fromDay, toDay) {
   };
 }
 
+// Pure ISO-range wrapper around aggregateUsage: parse optional from/to ISO
+// timestamps into local-day keys and aggregate the (already-warm) metaCache.
+// Callers must have run scanSessions() first so the cache is populated. Shared by
+// the GET /api/usage route and the MCP get_usage tool so the range logic lives once.
+function usageForRange(fromISO, toISO) {
+  const fromMs = fromISO ? Date.parse(fromISO) : NaN;
+  const toMs = toISO ? Date.parse(toISO) : NaN;
+  const fromDay = Number.isNaN(fromMs) ? null : localDayKey(fromMs);
+  const toDay = Number.isNaN(toMs) ? null : localDayKey(toMs);
+  return aggregateUsage(fromDay, toDay);
+}
+
 // Extract user + assistant text messages for the detail-pane preview.
 async function extractPreview(filePath, limit = 400, textCap = 1500) {
   let content;
@@ -1640,11 +1652,7 @@ const server = http.createServer(async (req, res) => {
       await scanSessions(); // ensure metaCache (and its usage records) are warm & fresh
       const fromRaw = parsed.searchParams.get('from');
       const toRaw = parsed.searchParams.get('to');
-      const fromMs = fromRaw ? Date.parse(fromRaw) : NaN;
-      const toMs = toRaw ? Date.parse(toRaw) : NaN;
-      const fromDay = Number.isNaN(fromMs) ? null : localDayKey(fromMs);
-      const toDay = Number.isNaN(toMs) ? null : localDayKey(toMs);
-      return sendJson(res, 200, aggregateUsage(fromDay, toDay));
+      return sendJson(res, 200, usageForRange(fromRaw, toRaw));
     }
 
     if (pathname === '/api/search' && method === 'GET') {
@@ -1844,4 +1852,11 @@ module.exports = {
   redactSecrets, rateFor, modelTier, insertProgressSection, upsertClaudeBlock,
   buildProgressContent, buildClaudeContent,
   UUID_RE, HANDOFF_CLAUDE_START, HANDOFF_CLAUDE_END,
+  // Read-only query surface reused by the MCP server (web/mcp-server.js). These
+  // are the SAME functions the HTTP routes call — one parsing implementation.
+  // All returned text is already redacted (extractPreview / deepSearch scrub
+  // secrets before returning). None of these write files or spawn processes.
+  scanSessions, deepSearch, extractPreview, aggregateUsage, usageForRange,
+  getSessionMeta, resumeCommandFor, displayTitle, projectDisplayName,
+  CLAUDE_ROOT, PROJECTS_DIR,
 };

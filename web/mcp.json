@@ -1,0 +1,12 @@
+{
+  "_comment": "Claude Code MCP registration for the Session Indexer. Replace the args path with the ABSOLUTE path to mcp-server.js on your machine. CSI_CLAUDE_DIR is optional (defaults to ~/.claude); set it to point at an alternate transcript root (e.g. a demo fixture). To register from the CLI instead of pasting this, run: claude mcp add claude-session-indexer --scope user -- node /ABSOLUTE/PATH/TO/web/mcp-server.js",
+  "mcpServers": {
+    "claude-session-indexer": {
+      "command": "node",
+      "args": [
+        "/Users/sudarshan/Desktop/Side Hustles/claude_chat_gatherer/web/mcp-server.js"
+      ],
+      "env": {}
+    }
+  }
+}
