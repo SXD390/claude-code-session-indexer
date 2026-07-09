@@ -1,5 +1,5 @@
 /* =========================================================================
-   Reprise — Web  ·  frontend
+   Claude Code Session Indexer — Web  ·  frontend
    Zero dependencies, no build step, fully offline.
    ========================================================================= */
 (function () {

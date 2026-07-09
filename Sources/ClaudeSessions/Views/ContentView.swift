@@ -60,7 +60,7 @@ struct ContentView: View {
             detailColumn
                 .navigationSplitViewColumnWidth(min: 460, ideal: 620)
         }
-        .navigationTitle("Reprise")
+        .navigationTitle("Claude Code Session Indexer")
         .tint(Theme.coral)
         .frame(minWidth: 960, minHeight: 640)
         .toolbar { toolbarContent }

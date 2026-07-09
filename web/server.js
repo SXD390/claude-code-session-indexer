@@ -2,7 +2,7 @@
 'use strict';
 
 /*
- * Reprise — Web
+ * Claude Code Session Indexer — Web
  * ---------------------
  * A zero-dependency, cross-platform local dashboard for browsing, searching,
  * and resuming Claude Code CLI sessions. Node 18+ / stdlib only.
@@ -1342,7 +1342,7 @@ const server = http.createServer(async (req, res) => {
 server.listen(PORT, HOST, () => {
   ensureDir(APP_DATA_DIR);
   console.log('');
-  console.log('  Reprise — Web');
+  console.log('  Claude Code Session Indexer — Web');
   console.log('  ---------------------');
   console.log(`  Local dashboard:  http://${HOST}:${PORT}`);
   console.log(`  Projects dir:     ${PROJECTS_DIR}`);

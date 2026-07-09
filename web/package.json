@@ -1,5 +1,5 @@
 {
-  "name": "reprise-web",
+  "name": "claude-session-indexer-web",
   "version": "1.0.0",
   "description": "Local, private web dashboard for browsing, searching, and resuming Claude Code CLI sessions. Zero dependencies, cross-platform (macOS, Windows, Linux).",
   "license": "MIT",

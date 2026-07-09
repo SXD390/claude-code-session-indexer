@@ -1,11 +1,11 @@
 #!/bin/zsh
-# Builds ClaudeSessions in release mode and assembles "Reprise.app" in dist/.
+# Builds ClaudeSessions in release mode and assembles "Claude Code Session Indexer.app" in dist/.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-APP_NAME="Reprise"
+APP_NAME="Claude Code Session Indexer"
 APP="$ROOT/dist/$APP_NAME.app"
 
 echo "→ swift build -c release"
@@ -23,11 +23,11 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 <plist version="1.0">
 <dict>
     <key>CFBundleName</key>
-    <string>Reprise</string>
+    <string>Claude Code Session Indexer</string>
     <key>CFBundleDisplayName</key>
-    <string>Reprise</string>
+    <string>Claude Code Session Indexer</string>
     <key>CFBundleIdentifier</key>
-    <string>com.sxd390.reprise</string>
+    <string>com.sxd390.claude-session-indexer</string>
     <key>CFBundleVersion</key>
     <string>1.0</string>
     <key>CFBundleShortVersionString</key>

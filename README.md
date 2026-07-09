@@ -1,6 +1,6 @@
 <div align="center">
 
-# Reprise
+# Claude Code Session Indexer
 
 **Pick up any Claude Code session right where you left off.**
 
@@ -14,20 +14,20 @@ Native macOS app · Web dashboard for Windows & Linux · Zero cloud, zero teleme
 [![Web](https://img.shields.io/badge/Web-Node%2018%2B-333?logo=javascript)](#-web-app-windows--linux--macos)
 [![Dependencies](https://img.shields.io/badge/dependencies-zero-brightgreen)](#)
 
-<img src="docs/mac-detail.png" alt="Reprise session detail with Pickup Brief" width="900">
+<img src="docs/mac-detail.png" alt="Claude Code Session Indexer session detail with Pickup Brief" width="900">
 
 </div>
 
 ---
 
-## Why Reprise?
+## Why Claude Code Session Indexer?
 
 Claude Code stores every session as a JSONL transcript under `~/.claude/` — and then makes you
 scroll a terminal picker to find them again. Plenty of tools let you *view* that history or
-*count* your tokens. Reprise is built around a different idea: **continuity** — getting back
+*count* your tokens. Claude Code Session Indexer is built around a different idea: **continuity** — getting back
 into flow on work you started days ago.
 
-|  | History viewers | Usage meters | **Reprise** |
+|  | History viewers | Usage meters | **Claude Code Session Indexer** |
 |---|:---:|:---:|:---:|
 | Browse & resume sessions | ✅ | — | ✅ |
 | Token & cost analytics | some | ✅ | ✅ |
@@ -42,7 +42,7 @@ into flow on work you started days ago.
 
 ### ⏮ Pickup Briefs
 
-The feature the app is named for. One click generates a brief for any session:
+Your fast lane back into flow. One click generates a brief for any session:
 **State** (what was done, what was mid-flight), **Open threads** (unresolved bugs, deferred
 TODOs), and a **ready-to-paste Next Prompt** that drops you back into productive work — no
 re-reading a 60-message transcript to remember what you were doing.
@@ -76,9 +76,9 @@ copyable resume commands, and a conversation preview.
 Native SwiftUI — no Electron, no web view. Warm charcoal/cream design with light & dark mode.
 
 ```sh
-git clone https://github.com/SXD390/reprise.git && cd reprise
+git clone https://github.com/SXD390/claude-code-session-indexer.git && cd claude-code-session-indexer
 ./scripts/build_app.sh
-open "dist/Reprise.app"        # drag into /Applications to keep it
+open "dist/Claude Code Session Indexer.app"        # drag into /Applications to keep it
 ```
 
 Requires macOS 14+ and Xcode command-line tools.
@@ -93,14 +93,14 @@ step, bound strictly to `127.0.0.1`.
 ```
 
 ```bat
-web\"Start Reprise.bat"         :: Windows — or just double-click it
+web\"Start Session Indexer.bat"         :: Windows — or just double-click it
 ```
 
 Then open <http://127.0.0.1:4747>. Requires Node 18+. `/` to search, `↑↓` to navigate,
 `R` to resume, `C` to copy the resume command.
 
 <div align="center">
-<img src="docs/web-overview.png" alt="Reprise web dashboard" width="900">
+<img src="docs/web-overview.png" alt="Claude Code Session Indexer web dashboard" width="900">
 </div>
 
 ## How it works
@@ -113,11 +113,11 @@ Then open <http://127.0.0.1:4747>. Requires Node 18+. `/` to search, `↑↓` to
 
 - **Everything stays on your machine.** No cloud, no accounts, no telemetry, no external
   requests — the web server refuses non-localhost connections.
-- **Read-only** over `~/.claude` — Reprise never modifies your Claude Code data.
+- **Read-only** over `~/.claude` — Claude Code Session Indexer never modifies your Claude Code data.
 - **Fast**: transcripts are parsed in parallel and cached by file mtime, so token counts are
-  deduplicated correctly (streaming writes duplicate usage lines — Reprise accounts for that)
+  deduplicated correctly (streaming writes duplicate usage lines — Claude Code Session Indexer accounts for that)
   and relaunches are instant.
-- **Costs are estimates.** Reprise prices tokens at published API rates ("API-equivalent").
+- **Costs are estimates.** Claude Code Session Indexer prices tokens at published API rates ("API-equivalent").
   If you're on a Claude subscription, it shows what your usage *would have cost* — a measure
   of value, not a bill.
 
@@ -135,5 +135,5 @@ node web/server.js                           # run the web server
 
 [MIT](LICENSE) © Sudarshan Venkatesh
 
-Reprise is an independent open-source project, not affiliated with or endorsed by Anthropic.
+Claude Code Session Indexer is an independent open-source project, not affiliated with or endorsed by Anthropic.
 "Claude" and "Claude Code" are trademarks of Anthropic, PBC.

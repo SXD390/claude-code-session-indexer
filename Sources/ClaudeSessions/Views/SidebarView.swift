@@ -90,7 +90,7 @@ struct SidebarView: View {
         HStack(spacing: 10) {
             AppGlyph(size: 28)
             VStack(alignment: .leading, spacing: 0) {
-                Text("Reprise")
+                Text("Session Indexer")
                     .font(.system(size: 15, weight: .bold, design: .rounded))
                     .foregroundStyle(.primary)
                 Text("for Claude Code")
