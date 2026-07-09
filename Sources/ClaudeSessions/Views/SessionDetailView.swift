@@ -8,6 +8,7 @@ struct SessionDetailView: View {
     @State private var previewLoaded = false
     @State private var copiedCommand = false
     @State private var copiedId = false
+    @State private var copiedBrief = false
     @Environment(\.colorScheme) private var scheme
 
     private var isActive: Bool { store.activeBySessionId[session.sessionId] != nil }
@@ -18,7 +19,9 @@ struct SessionDetailView: View {
             VStack(alignment: .leading, spacing: 18) {
                 header
                 resumeCard
+                briefCard
                 summaryCard
+                usageCard
                 metadataCard
                 conversationCard
             }
@@ -234,6 +237,182 @@ struct SessionDetailView: View {
         }
     }
 
+    // MARK: - Pickup Brief
+
+    private var briefCard: some View {
+        Card(title: "Pickup Brief", systemImage: "flag.checkered", accent: Theme.coral, gradientIcon: true) {
+            VStack(alignment: .leading, spacing: 14) {
+                if let brief = store.briefs[session.sessionId] {
+                    briefContent(brief)
+                } else {
+                    HStack(spacing: 12) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Get back into flow")
+                                .font(.system(size: 13, weight: .semibold))
+                            Text("Generate a resume brief: where things stand, what's open, and a ready-to-paste next prompt.")
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        Spacer()
+                        briefActionButton(label: "Generate")
+                    }
+                }
+                if let error = store.briefErrors[session.sessionId] {
+                    Label(error, systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption).foregroundStyle(.red).textSelection(.enabled)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func briefContent(_ brief: StoredBrief) -> some View {
+        // STATE
+        if !brief.state.isEmpty {
+            Text(brief.state)
+                .font(.system(size: 13))
+                .lineSpacing(2)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+
+        // OPEN threads
+        if !brief.open.isEmpty {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("OPEN THREADS")
+                    .font(.system(size: 9.5, weight: .semibold, design: .rounded))
+                    .tracking(0.5)
+                    .foregroundStyle(.tertiary)
+                ForEach(Array(brief.open.enumerated()), id: \.offset) { _, item in
+                    HStack(alignment: .top, spacing: 8) {
+                        Image(systemName: "circle.fill")
+                            .font(.system(size: 5))
+                            .foregroundStyle(Theme.coral)
+                            .padding(.top, 6)
+                        Text(item)
+                            .font(.system(size: 12.5))
+                            .textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+        }
+
+        // NEXT PROMPT — terminal-style copyable block
+        if !brief.nextPrompt.isEmpty {
+            VStack(alignment: .leading, spacing: 7) {
+                Text("NEXT PROMPT")
+                    .font(.system(size: 9.5, weight: .semibold, design: .rounded))
+                    .tracking(0.5)
+                    .foregroundStyle(.tertiary)
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: "text.cursor")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(Theme.coralHi)
+                        .padding(.top, 2)
+                    Text(brief.nextPrompt)
+                        .font(.system(size: 12.5, design: .monospaced))
+                        .foregroundStyle(Color(hex: 0xEDE6DF))
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .padding(14)
+                .background(Theme.terminal, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous).strokeBorder(.white.opacity(0.06), lineWidth: 1))
+
+                Button {
+                    ResumeService.copy(brief.nextPrompt)
+                    flash($copiedBrief)
+                } label: {
+                    Label(copiedBrief ? "Copied to clipboard" : "Copy next prompt",
+                          systemImage: copiedBrief ? "checkmark" : "doc.on.doc")
+                }
+                .buttonStyle(GradientButtonStyle())
+            }
+        }
+
+        // Footer: staleness + regenerate
+        HStack(spacing: 8) {
+            Text("Generated \(brief.generatedAt.formatted(.relative(presentation: .named)))")
+                .font(.caption).foregroundStyle(.tertiary)
+            if store.briefIsStale(for: session) {
+                Label("New activity since", systemImage: "exclamationmark.circle.fill")
+                    .font(.caption).foregroundStyle(.orange)
+            }
+            Spacer()
+            briefActionButton(label: "Regenerate")
+        }
+    }
+
+    @ViewBuilder
+    private func briefActionButton(label: String) -> some View {
+        if store.generatingBriefFor.contains(session.sessionId) {
+            HStack(spacing: 6) {
+                ProgressView().controlSize(.small).scaleEffect(0.8)
+                Text("Briefing…").font(.callout).foregroundStyle(.secondary)
+            }
+        } else if label == "Regenerate" {
+            Button { store.generateBrief(for: session) } label: {
+                Label(label, systemImage: "arrow.triangle.2.circlepath")
+            }
+            .buttonStyle(SoftButtonStyle())
+        } else {
+            Button { store.generateBrief(for: session) } label: {
+                Label(label, systemImage: "flag.checkered")
+            }
+            .buttonStyle(GradientButtonStyle())
+        }
+    }
+
+    // MARK: - Usage
+
+    @ViewBuilder
+    private var usageCard: some View {
+        if let rec = store.usageRecord(for: session), rec.totalTokens > 0 {
+            Card(title: "Usage", systemImage: "gauge.with.dots.needle.33percent", accent: accent) {
+                VStack(alignment: .leading, spacing: 14) {
+                    HStack(spacing: 10) {
+                        tokenCell("Input", rec.totalInput, "arrow.down.circle")
+                        tokenCell("Output", rec.totalOutput, "arrow.up.circle")
+                        tokenCell("Cache read", rec.totalCacheRead, "arrow.clockwise.circle")
+                        tokenCell("Cache write", rec.totalCacheWrite, "square.and.arrow.down")
+                    }
+                    HStack(alignment: .center, spacing: 12) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(Fmt.cost(rec.totalCost))
+                                .font(.system(size: 20, weight: .bold, design: .rounded).monospacedDigit())
+                                .foregroundStyle(.primary)
+                            Text("Est. cost (API-equivalent)")
+                                .font(.system(size: 11))
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        FlowChips(models: rec.perModel)
+                    }
+                }
+            }
+        }
+    }
+
+    private func tokenCell(_ label: String, _ value: Int, _ icon: String) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Image(systemName: icon).font(.system(size: 11, weight: .semibold)).foregroundStyle(accent)
+            Text(Fmt.tokens(value))
+                .font(.system(size: 16, weight: .bold, design: .rounded).monospacedDigit())
+                .foregroundStyle(.primary)
+            Text(label)
+                .font(.system(size: 10))
+                .foregroundStyle(.tertiary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 10)
+        .padding(.horizontal, 11)
+        .background(Theme.field, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous).strokeBorder(Theme.border, lineWidth: 1))
+    }
+
     // MARK: - Metadata
 
     private var metadataCard: some View {
@@ -420,5 +599,28 @@ struct MessageBubble: View {
     private var bubbleBackground: some View {
         RoundedRectangle(cornerRadius: 12, style: .continuous)
             .fill(isUser ? Theme.coralTint.opacity(0.12) : Theme.cardRaised)
+    }
+}
+
+/// Per-model cost chips for the per-session Usage card (top few models).
+struct FlowChips: View {
+    let models: [ModelStat]
+    var body: some View {
+        HStack(spacing: 6) {
+            ForEach(models.prefix(3)) { m in
+                HStack(spacing: 5) {
+                    Text(m.displayName)
+                        .font(.system(size: 10.5, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.primary)
+                    Text(Fmt.cost(m.cost))
+                        .font(.system(size: 10.5, weight: .medium, design: .rounded).monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(Theme.coralTint.opacity(0.10), in: Capsule())
+                .overlay(Capsule().strokeBorder(Theme.coral.opacity(0.22), lineWidth: 1))
+            }
+        }
     }
 }

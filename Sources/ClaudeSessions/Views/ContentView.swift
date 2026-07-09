@@ -9,7 +9,36 @@ struct ContentView: View {
     @AppStorage("hideEmpty") private var hideEmpty = true
     @Environment(\.scenePhase) private var scenePhase
 
+    // Insights range
+    @State private var rangePreset: RangePreset = .d30
+    @State private var customStart = Calendar.current.date(byAdding: .day, value: -30, to: Date()) ?? Date()
+    @State private var customEnd = Date()
+
+    // Deep search
+    @State private var deepSearch = false
+    @State private var deepResults: [DeepSearchHit] = []
+    @State private var deepSearching = false
+    @State private var deepTask: Task<Void, Never>?
+
+    // Project journal
+    @State private var showJournal = false
+
     private var sort: SortOrder { SortOrder(rawValue: sortRaw) ?? .lastActivity }
+
+    private var isInsights: Bool { selection == .insights }
+
+    private var selectedProjectKey: String? {
+        if case .project(let key) = selection { return key }
+        return nil
+    }
+
+    private var deepActive: Bool {
+        deepSearch && search.trimmingCharacters(in: .whitespacesAndNewlines).count >= 3
+    }
+
+    private var range: DateInterval? {
+        store.dateInterval(preset: rangePreset, customStart: customStart, customEnd: customEnd)
+    }
 
     private var visibleSessions: [SessionMeta] {
         store.filteredSessions(for: selection ?? .all, search: search, sort: sort, hideEmpty: hideEmpty)
@@ -25,54 +54,132 @@ struct ContentView: View {
             SidebarView(selection: $selection)
                 .navigationSplitViewColumnWidth(min: 210, ideal: 244, max: 300)
         } content: {
+            contentColumn
+                .navigationSplitViewColumnWidth(min: 300, ideal: 360, max: 480)
+        } detail: {
+            detailColumn
+                .navigationSplitViewColumnWidth(min: 460, ideal: 620)
+        }
+        .navigationTitle("Reprise")
+        .tint(Theme.coral)
+        .frame(minWidth: 960, minHeight: 640)
+        .toolbar { toolbarContent }
+        .task { store.refresh() }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { store.refreshActive() }
+        }
+        .onChange(of: store.lastRefreshed) { _, _ in
+            if selectedSessionId == nil {
+                selectedSessionId = store.recentSessions(1).first?.sessionId
+            }
+        }
+        .onChange(of: selection) { _, _ in showJournal = false }
+        .onChange(of: search) { _, _ in scheduleDeepSearch() }
+        .onChange(of: deepSearch) { _, on in
+            if on { scheduleDeepSearch() } else { deepTask?.cancel(); deepResults = []; deepSearching = false }
+        }
+    }
+
+    // MARK: - Columns
+
+    @ViewBuilder
+    private var contentColumn: some View {
+        if isInsights {
+            InsightsSidePanel(preset: $rangePreset, customStart: $customStart, customEnd: $customEnd)
+        } else if deepActive {
+            DeepSearchResultsView(
+                results: deepResults, query: search.trimmingCharacters(in: .whitespacesAndNewlines),
+                scanning: deepSearching, scanned: store.deepScanned, total: store.deepTotal,
+                selectedSessionId: $selectedSessionId)
+            .searchable(text: $search, prompt: "Search inside conversations")
+        } else {
             SessionListView(
                 sessions: visibleSessions,
                 selectedSessionId: $selectedSessionId,
                 sortRaw: $sortRaw,
                 hideEmpty: $hideEmpty
             )
-            .navigationSplitViewColumnWidth(min: 320, ideal: 376, max: 480)
             .searchable(text: $search, prompt: "Search sessions")
-        } detail: {
-            Group {
-                if let session = selectedSession {
-                    SessionDetailView(session: session)
-                        .id(session.sessionId)
-                } else {
-                    OverviewDashboard(onSelect: { selectedSessionId = $0 })
-                }
-            }
-            .navigationSplitViewColumnWidth(min: 460, ideal: 620)
         }
-        .navigationTitle("Reprise")
-        .tint(Theme.coral)
-        .frame(minWidth: 960, minHeight: 640)
-        .toolbar {
-            ToolbarItem(placement: .primaryAction) {
+    }
+
+    @ViewBuilder
+    private var detailColumn: some View {
+        if isInsights {
+            InsightsView(range: range, rangeLabel: rangePreset.label, onSelect: openSession)
+        } else if let key = selectedProjectKey, showJournal {
+            JournalView(projectKey: key, onSelect: openSession)
+        } else if let session = selectedSession {
+            SessionDetailView(session: session).id(session.sessionId)
+        } else {
+            OverviewDashboard(onSelect: { selectedSessionId = $0 })
+        }
+    }
+
+    // MARK: - Toolbar
+
+    @ToolbarContentBuilder
+    private var toolbarContent: some ToolbarContent {
+        if selectedProjectKey != nil {
+            ToolbarItem(placement: .automatic) {
                 Button {
-                    store.refresh()
+                    showJournal.toggle()
                 } label: {
-                    if store.isLoading {
-                        ProgressView().controlSize(.small)
-                    } else {
-                        Label("Refresh", systemImage: "arrow.clockwise")
-                    }
+                    Label(showJournal ? "Sessions" : "Journal",
+                          systemImage: showJournal ? "list.bullet" : "book")
                 }
-                .help("Rescan sessions (⌘R)")
-                .disabled(store.isLoading)
+                .help(showJournal ? "Back to session detail" : "Open this project's journal")
             }
         }
-        .task {
-            store.refresh()
-        }
-        .onChange(of: scenePhase) { _, phase in
-            if phase == .active { store.refreshActive() }
-        }
-        .onChange(of: store.lastRefreshed) { _, _ in
-            // First load: open the most recent session so the detail pane isn't empty.
-            if selectedSessionId == nil {
-                selectedSessionId = visibleSessions.first?.sessionId
+        if !isInsights {
+            ToolbarItem(placement: .automatic) {
+                Button {
+                    deepSearch.toggle()
+                } label: {
+                    Label("Search in conversations", systemImage: "text.magnifyingglass")
+                        .foregroundStyle(deepSearch ? Theme.coral : .primary)
+                }
+                .help(deepSearch ? "Deep search on — searching inside transcripts" : "Search inside conversations")
             }
+        }
+        ToolbarItem(placement: .primaryAction) {
+            Button {
+                store.refresh()
+            } label: {
+                if store.isLoading {
+                    ProgressView().controlSize(.small)
+                } else {
+                    Label("Refresh", systemImage: "arrow.clockwise")
+                }
+            }
+            .help("Rescan sessions (⌘R)")
+            .disabled(store.isLoading)
+        }
+    }
+
+    // MARK: - Actions
+
+    private func openSession(_ id: String) {
+        selectedSessionId = id
+        showJournal = false
+        if isInsights { selection = .all }
+    }
+
+    private func scheduleDeepSearch() {
+        deepTask?.cancel()
+        let q = search.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard deepSearch, q.count >= 3 else {
+            deepResults = []; deepSearching = false
+            return
+        }
+        deepTask = Task {
+            try? await Task.sleep(nanoseconds: 250_000_000)   // debounce keystrokes
+            if Task.isCancelled { return }
+            deepSearching = true
+            let results = await store.runDeepSearch(q)
+            if Task.isCancelled { return }
+            deepResults = results
+            deepSearching = false
         }
     }
 }

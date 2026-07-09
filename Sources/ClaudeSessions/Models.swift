@@ -93,6 +93,59 @@ struct StoredSummary: Codable {
     let sessionLastActivity: Date?
 }
 
+/// A persisted "Pickup Brief" — parsed into its three sections for rendering.
+struct StoredBrief: Codable {
+    let state: String
+    let open: [String]
+    let nextPrompt: String
+    let generatedAt: Date
+    let sessionLastActivity: Date?
+    /// Raw model output, kept as a fallback when parsing is imperfect.
+    let raw: String
+}
+
+/// One deep-search hit inside a transcript, resolved with its session's metadata.
+struct DeepSearchHit: Identifiable, Hashable {
+    let id = UUID()
+    let sessionId: String
+    let sessionTitle: String
+    let projectKey: String
+    let projectName: String
+    let role: String          // "user" | "assistant"
+    let snippet: String
+    let timestamp: Date?
+}
+
+/// Insights dashboard date-range presets.
+enum RangePreset: String, CaseIterable, Identifiable {
+    case d7 = "7D"
+    case d30 = "30D"
+    case d90 = "90D"
+    case all = "All"
+    case custom = "Custom"
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .d7: return "Last 7 days"
+        case .d30: return "Last 30 days"
+        case .d90: return "Last 90 days"
+        case .all: return "All time"
+        case .custom: return "Custom range"
+        }
+    }
+
+    var days: Int? {
+        switch self {
+        case .d7: return 7
+        case .d30: return 30
+        case .d90: return 90
+        case .all, .custom: return nil
+        }
+    }
+}
+
 enum SortOrder: String, CaseIterable, Identifiable {
     case lastActivity = "Last Activity"
     case created = "Date Created"
@@ -101,6 +154,7 @@ enum SortOrder: String, CaseIterable, Identifiable {
 }
 
 enum SidebarItem: Hashable {
+    case insights
     case all
     case named
     case active

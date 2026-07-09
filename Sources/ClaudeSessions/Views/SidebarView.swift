@@ -16,6 +16,14 @@ struct SidebarView: View {
     private var list: some View {
         List(selection: $selection) {
             Section {
+                SidebarRow(title: "Insights", count: nil,
+                           isSelected: selection == .insights) {
+                    Image(systemName: "chart.bar.xaxis").foregroundStyle(Theme.coral)
+                }
+                .tag(SidebarItem.insights)
+                .listRowBackground(Color.clear)
+                .listRowInsets(rowInsets)
+
                 SidebarRow(title: "All Sessions", count: store.sessions.count,
                            isSelected: selection == .all) {
                     Image(systemName: "square.stack.3d.up").foregroundStyle(.secondary)
@@ -134,7 +142,7 @@ struct SidebarView: View {
 
 private struct SidebarRow<Icon: View>: View {
     let title: String
-    let count: Int
+    let count: Int?
     let isSelected: Bool
     @ViewBuilder var icon: Icon
     @State private var hovering = false
@@ -147,7 +155,7 @@ private struct SidebarRow<Icon: View>: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
             Spacer(minLength: 6)
-            CountBadge(count: count)
+            if let count { CountBadge(count: count) }
         }
         .padding(.horizontal, 9)
         .padding(.vertical, 6)

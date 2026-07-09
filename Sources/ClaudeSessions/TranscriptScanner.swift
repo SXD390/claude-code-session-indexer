@@ -271,3 +271,147 @@ enum TranscriptScanner {
         return true
     }
 }
+
+// MARK: - Usage extraction (analytics)
+
+/// One assistant API message's token usage, deduped across streaming chunks.
+struct RawUsageEvent {
+    let model: String
+    let input: Int
+    let output: Int
+    let cacheRead: Int
+    let cacheWrite: Int
+    let timestamp: Date?
+}
+
+struct UsageExtraction {
+    var events: [RawUsageEvent]     // deduped by message.id → requestId → line
+    var allTimestamps: [Date]       // every line carrying a timestamp, ascending
+}
+
+/// One raw deep-search match within a transcript (session metadata attached later).
+struct RawDeepMatch {
+    let role: String                // "user" | "assistant"
+    let snippet: String
+    let timestamp: Date?
+}
+
+extension TranscriptScanner {
+
+    /// Scans a transcript for assistant token-usage messages (INCLUDING sidechains,
+    /// per the analytics spec) plus every timestamp (for the heartbeat time metric).
+    static func extractUsage(url: URL) -> UsageExtraction {
+        guard let data = try? Data(contentsOf: url), !data.isEmpty else {
+            return UsageExtraction(events: [], allTimestamps: [])
+        }
+        let content = String(decoding: data, as: UTF8.self)
+
+        var events: [RawUsageEvent] = []
+        var timestamps: [Date] = []
+        var seen = Set<String>()
+        var fallbackCounter = 0
+
+        for lineSub in content.split(separator: "\n", omittingEmptySubsequences: true) {
+            let line = lineSub
+
+            // Heartbeat: collect timestamps from EVERY line (user + assistant + sidechain).
+            if line.contains("\"timestamp\":\""),
+               let ts = extractString(from: line, key: "timestamp"),
+               let d = parseDate(ts) {
+                timestamps.append(d)
+            }
+
+            // Usage events: assistant lines carrying a usage block. Sidechains INCLUDED.
+            guard line.contains("\"type\":\"assistant\""), line.contains("\"usage\"") else { continue }
+            guard let obj = decode(line),
+                  let message = obj["message"] as? [String: Any],
+                  let usage = message["usage"] as? [String: Any] else { continue }
+
+            // Dedup key: message.id → requestId → count-once-per-line.
+            let key: String
+            if let mid = message["id"] as? String, !mid.isEmpty {
+                key = "m:" + mid
+            } else if let rid = obj["requestId"] as? String, !rid.isEmpty {
+                key = "r:" + rid
+            } else {
+                fallbackCounter += 1
+                key = "l:\(fallbackCounter)"
+            }
+            guard seen.insert(key).inserted else { continue }
+
+            let model = (message["model"] as? String) ?? "unknown"
+            func tok(_ k: String) -> Int { (usage[k] as? NSNumber)?.intValue ?? 0 }
+            let ts = (obj["timestamp"] as? String).flatMap(parseDate)
+
+            events.append(RawUsageEvent(
+                model: model,
+                input: tok("input_tokens"),
+                output: tok("output_tokens"),
+                cacheRead: tok("cache_read_input_tokens"),
+                cacheWrite: tok("cache_creation_input_tokens"),
+                timestamp: ts
+            ))
+        }
+
+        timestamps.sort()
+        return UsageExtraction(events: events, allTimestamps: timestamps)
+    }
+
+    /// Case-insensitive substring scan over user + assistant text (skips
+    /// meta/tool_result/sidechain, matching the preview extraction rules).
+    static func deepSearch(url: URL, query: String, perSessionCap: Int = 8) -> [RawDeepMatch] {
+        let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard q.count >= 3 else { return [] }
+        guard let data = try? Data(contentsOf: url), !data.isEmpty else { return [] }
+        let content = String(decoding: data, as: UTF8.self)
+        let qLower = q.lowercased()
+
+        var matches: [RawDeepMatch] = []
+        for line in content.split(separator: "\n", omittingEmptySubsequences: true) {
+            if matches.count >= perSessionCap { break }
+            if line.contains("\"isSidechain\":true") { continue }
+            let isUser = line.contains("\"type\":\"user\"")
+            let isAssistant = line.contains("\"type\":\"assistant\"")
+            guard isUser || isAssistant else { continue }
+            if isUser && (line.contains("\"isMeta\":true") || line.contains("\"tool_result\"")) { continue }
+            // Cheap reject before the JSON decode.
+            guard line.lowercased().contains(qLower) else { continue }
+
+            guard let obj = decode(line) else { continue }
+            let text: String? = isUser ? userText(from: obj) : assistantText(from: obj)
+            guard let t = text else { continue }
+            if isUser && !isRealPrompt(t) { continue }
+            guard let r = t.range(of: q, options: .caseInsensitive) else { continue }
+
+            let ts = (obj["timestamp"] as? String).flatMap(parseDate)
+            matches.append(RawDeepMatch(
+                role: isUser ? "user" : "assistant",
+                snippet: snippet(t, around: r, pad: 120),
+                timestamp: ts
+            ))
+        }
+        return matches
+    }
+
+    /// A ±pad-character window around a match, whitespace-collapsed, with ellipses.
+    private static func snippet(_ text: String, around range: Range<String.Index>, pad: Int) -> String {
+        let start = text.index(range.lowerBound, offsetBy: -pad, limitedBy: text.startIndex) ?? text.startIndex
+        let end = text.index(range.upperBound, offsetBy: pad, limitedBy: text.endIndex) ?? text.endIndex
+        var s = String(text[start..<end])
+        s = s.replacingOccurrences(of: "\n", with: " ")
+        while s.contains("  ") { s = s.replacingOccurrences(of: "  ", with: " ") }
+        s = s.trimmingCharacters(in: .whitespaces)
+        if start > text.startIndex { s = "…" + s }
+        if end < text.endIndex { s = s + "…" }
+        return s
+    }
+
+    /// Extracts the tail of a session for the Pickup Brief pipeline: the last
+    /// `limit` user+assistant text messages plus file paths from the final message.
+    static func extractBriefTail(url: URL, limit: Int = 30) -> (messages: [PreviewMessage], lastAssistant: String?) {
+        let all = extractPreview(url: url, limit: 2000)
+        let tail = Array(all.suffix(limit))
+        let lastAssistant = all.last(where: { $0.role == "assistant" })?.text
+        return (tail, lastAssistant)
+    }
+}
