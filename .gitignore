@@ -6,3 +6,5 @@ dist/AppIcon.iconset/
 .DS_Store
 node_modules/
 npm-debug.log
+dist/*.dmg
+dist/dmg-stage/
