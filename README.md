@@ -64,6 +64,14 @@ A kickstart prompt ties it together so `claude` in a fresh session knows exactly
 Search *inside* the conversations, not just the titles. "Which session did I fix that CORS bug
 in?" — highlighted snippets across hundreds of megabytes of transcripts, grouped by session.
 
+By default this scans your transcripts directly (fast enough for most people, nothing to set up).
+If you have thousands of sessions and want instant search, flip on the **optional SQLite FTS5
+index** — set `CSI_INDEX=1` (or use the macOS *Fast Search Index* menu toggle). It's still
+**zero third-party dependencies**: it uses the platform's built-in SQLite (Node's `node:sqlite` on
+the web side, requires Node 22.5+ and falls back to the plain scan otherwise; the system
+`libsqlite3` on macOS). The index stores only redacted text and is rebuilt incrementally; with the
+flag off, nothing is created and behavior is identical to the default scan.
+
 ### 📖 Project Journals
 
 Every project gets an auto-stitched timeline of all its sessions — what happened, how long it
