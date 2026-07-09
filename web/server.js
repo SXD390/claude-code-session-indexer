@@ -45,8 +45,10 @@ const IS_WINDOWS = process.platform === 'win32';
 const IS_MAC = process.platform === 'darwin';
 
 const HOME = os.homedir();
-const PROJECTS_DIR = path.join(HOME, '.claude', 'projects');
-const LIVE_SESSIONS_DIR = path.join(HOME, '.claude', 'sessions');
+// CSI_CLAUDE_DIR points the indexer at an alternate data root (demos, tests).
+const CLAUDE_ROOT = process.env.CSI_CLAUDE_DIR || path.join(HOME, '.claude');
+const PROJECTS_DIR = path.join(CLAUDE_ROOT, 'projects');
+const LIVE_SESSIONS_DIR = path.join(CLAUDE_ROOT, 'sessions');
 const PUBLIC_DIR = path.join(__dirname, 'public');
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;

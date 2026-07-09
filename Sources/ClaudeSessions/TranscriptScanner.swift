@@ -7,14 +7,20 @@ import Foundation
 /// timestamps are pulled out with plain string scans.
 enum TranscriptScanner {
 
+    /// CSI_CLAUDE_DIR points the indexer at an alternate data root (demos, tests).
+    static var claudeRoot: URL {
+        if let override = ProcessInfo.processInfo.environment["CSI_CLAUDE_DIR"], !override.isEmpty {
+            return URL(fileURLWithPath: override)
+        }
+        return FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".claude")
+    }
+
     static var projectsDir: URL {
-        FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".claude/projects")
+        claudeRoot.appendingPathComponent("projects")
     }
 
     static var liveSessionsDir: URL {
-        FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".claude/sessions")
+        claudeRoot.appendingPathComponent("sessions")
     }
 
     private static let isoParser: ISO8601DateFormatter = {
