@@ -125,13 +125,31 @@ Then open <http://127.0.0.1:4747>. Requires Node 18+. `/` to search, `↑↓` to
 
 - **Everything stays on your machine.** No cloud, no accounts, no telemetry, no external
   requests — the web server refuses non-localhost connections.
-- **Read-only** over `~/.claude` — Claude Code Session Indexer never modifies your Claude Code data.
+- **Read-only** over `~/.claude` — it never modifies your Claude Code data. The only files it
+  ever writes are the `PROGRESS.md` / `CLAUDE.md` you explicitly generate via Handoff, into the
+  session's own project directory, after you preview and confirm.
 - **Fast**: transcripts are parsed in parallel and cached by file mtime, so token counts are
   deduplicated correctly (streaming writes duplicate usage lines — Claude Code Session Indexer accounts for that)
   and relaunches are instant.
 - **Costs are estimates.** Claude Code Session Indexer prices tokens at published API rates ("API-equivalent").
   If you're on a Claude subscription, it shows what your usage *would have cost* — a measure
   of value, not a bill.
+
+## Security
+
+This is a local-only tool, but it opens a localhost port, spawns the `claude` CLI, and writes
+files — so it has been treated as a real attack surface and audited on both platforms.
+
+- **Zero dependencies** on either platform — no supply chain to compromise; `npm audit` is empty.
+- The web server is bound strictly to `127.0.0.1` and **rejects cross-origin and rebound-host
+  requests** (Host allowlist + Origin check + required custom header), so no website you visit can
+  drive it — the primary risk for any localhost tool.
+- The macOS resume/handoff paths **validate session IDs as UUIDs and shell-quote every value**, so
+  a crafted transcript can't inject commands; an adversarial regression harness proves it.
+- Full audit reports: [`docs/security/web-audit.md`](docs/security/web-audit.md) ·
+  [`docs/security/macos-audit.md`](docs/security/macos-audit.md). Automated CodeQL, OpenSSF
+  Scorecard, and secret scanning run in CI. Report issues via
+  [`SECURITY.md`](SECURITY.md).
 
 ## Development
 
