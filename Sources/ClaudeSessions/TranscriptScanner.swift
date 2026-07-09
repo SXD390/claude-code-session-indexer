@@ -161,12 +161,12 @@ enum TranscriptScanner {
 
             if isUser {
                 if let text = userText(from: obj), isRealPrompt(text) {
-                    messages.append(PreviewMessage(id: idx, role: "user", text: String(text.prefix(1500)), timestamp: ts))
+                    messages.append(PreviewMessage(id: idx, role: "user", text: Redaction.redact(String(text.prefix(1500))), timestamp: ts))
                     idx += 1
                 }
             } else {
                 if let text = assistantText(from: obj), !text.isEmpty {
-                    messages.append(PreviewMessage(id: idx, role: "assistant", text: String(text.prefix(1500)), timestamp: ts))
+                    messages.append(PreviewMessage(id: idx, role: "assistant", text: Redaction.redact(String(text.prefix(1500))), timestamp: ts))
                     idx += 1
                 }
             }
@@ -409,7 +409,7 @@ extension TranscriptScanner {
         s = s.trimmingCharacters(in: .whitespaces)
         if start > text.startIndex { s = "…" + s }
         if end < text.endIndex { s = s + "…" }
-        return s
+        return Redaction.redact(s)
     }
 
     /// Extracts the tail of a session for the Pickup Brief pipeline: the last

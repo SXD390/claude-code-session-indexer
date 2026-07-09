@@ -131,6 +131,23 @@ Then open <http://127.0.0.1:4747>. Requires Node 18+. `/` to search, `↑↓` to
 - **Fast**: transcripts are parsed in parallel and cached by file mtime, so token counts are
   deduplicated correctly (streaming writes duplicate usage lines — Claude Code Session Indexer accounts for that)
   and relaunches are instant.
+- **Secrets are redacted.** API keys, tokens, private-key blocks, and `NAME=value` secrets are
+  scrubbed from what's displayed and from the excerpts fed to `claude -p` (so they never reach a
+  generated `PROGRESS.md`/`CLAUDE.md`). Conservative by design — it won't touch ordinary code or prose.
+
+### Compatibility with Claude Code
+
+The `.jsonl` transcript format is Claude Code's **internal** storage, and Anthropic notes it can
+change between CLI releases. This tool reads it directly (that's what makes the deep features
+possible), so treat format support as best-effort:
+
+- **Developed against Claude Code 2.1.x** (the current line as of this writing).
+- Parsing is **defensive**: unrecognized or malformed lines are skipped, not fatal — a format
+  change degrades a field (e.g. a title falls back to the first prompt) rather than crashing the
+  scan. This is exercised by a corrupted-transcript test in CI.
+- If a future release changes the schema, please [open an issue](https://github.com/SXD390/claude-code-session-indexer/issues)
+  with your Claude Code version — the parsing rules live in one place per platform
+  (`TranscriptScanner.swift` / `web/server.js`) and are quick to update.
 - **Costs are estimates.** Claude Code Session Indexer prices tokens at published API rates ("API-equivalent").
   If you're on a Claude subscription, it shows what your usage *would have cost* — a measure
   of value, not a bill.

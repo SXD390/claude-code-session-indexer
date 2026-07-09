@@ -53,6 +53,35 @@ const PUBLIC_DIR = path.join(__dirname, 'public');
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+// Redacts high-confidence secrets (API keys, tokens, private keys, labelled
+// NAME=value assignments) from transcript text before it is displayed OR fed to
+// `claude -p` (whose output is written into PROGRESS.md / CLAUDE.md). Deliberately
+// conservative so ordinary prose/code is untouched — defense-in-depth, not a
+// guarantee. Kept in lockstep with Sources/ClaudeSessions/Redaction.swift.
+const REDACT_PLACEHOLDER = '[REDACTED]';
+const REDACT_PATTERNS = [
+  /-----BEGIN[ A-Z]*PRIVATE KEY-----[\s\S]*?-----END[ A-Z]*PRIVATE KEY-----/g,
+  /\bsk-[A-Za-z0-9_-]{16,}\b/g,
+  /\bgh[pousr]_[A-Za-z0-9]{20,}\b/g,
+  /\bgithub_pat_[A-Za-z0-9_]{20,}\b/g,
+  /\bA(?:KIA|SIA)[0-9A-Z]{16}\b/g,
+  /\bAIza[0-9A-Za-z_-]{35}\b/g,
+  /\bxox[baprs]-[A-Za-z0-9-]{10,}\b/g,
+  /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/g,
+  /\bBearer\s+[A-Za-z0-9._~+/=-]{20,}/gi,
+];
+// Labelled assignment: keep the key name, redact the value.
+const REDACT_ASSIGNMENT =
+  /((?:api[_-]?key|secret|token|password|passwd|private[_-]?key|access[_-]?key|client[_-]?secret|auth[_-]?token|credential)\s*[=:]\s*)["']?[^\s"'#]{6,}/gi;
+
+function redactSecrets(s) {
+  if (!s) return s;
+  let out = s;
+  for (const re of REDACT_PATTERNS) out = out.replace(re, REDACT_PLACEHOLDER);
+  out = out.replace(REDACT_ASSIGNMENT, (_m, key) => key + REDACT_PLACEHOLDER);
+  return out;
+}
+
 // Per-OS application-data directory (matches the platform conventions).
 function appDataRoot() {
   if (IS_MAC) return path.join(HOME, 'Library', 'Application Support');
@@ -592,12 +621,12 @@ async function extractPreview(filePath, limit = 400, textCap = 1500) {
     if (isUser) {
       const text = userText(obj);
       if (text && isRealPrompt(text)) {
-        messages.push({ role: 'user', text: text.slice(0, textCap), timestamp: ts });
+        messages.push({ role: 'user', text: redactSecrets(text.slice(0, textCap)), timestamp: ts });
       }
     } else {
       const text = assistantText(obj);
       if (text) {
-        messages.push({ role: 'assistant', text: text.slice(0, textCap), timestamp: ts });
+        messages.push({ role: 'assistant', text: redactSecrets(text.slice(0, textCap)), timestamp: ts });
       }
     }
   }
@@ -1307,6 +1336,7 @@ async function deepSearch(q) {
         const end = Math.min(text.length, mi + needle.length + 120);
         let snippet = text.slice(start, end).replace(/\s+/g, ' ').trim();
         snippet = (start > 0 ? '…' : '') + snippet + (end < text.length ? '…' : '');
+        snippet = redactSecrets(snippet);
         results.push({
           sessionId: entry.sessionId,
           sessionTitle: title,
@@ -1700,25 +1730,35 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-server.listen(PORT, HOST, () => {
-  ensureDir(APP_DATA_DIR);
-  console.log('');
-  console.log('  Claude Code Session Indexer — Web');
-  console.log('  ---------------------');
-  console.log(`  Local dashboard:  http://${HOST}:${PORT}`);
-  console.log(`  Projects dir:     ${PROJECTS_DIR}`);
-  console.log(`  App data:         ${APP_DATA_DIR}`);
-  console.log('  Bound to 127.0.0.1 only — your transcripts stay private.');
-  console.log('  Press Ctrl+C to stop.');
-  console.log('');
-});
+// Only start listening when run directly (`node server.js`). When required by a
+// test, we export the pure functions instead so they can be exercised without a
+// live port.
+if (require.main === module) {
+  server.listen(PORT, HOST, () => {
+    ensureDir(APP_DATA_DIR);
+    console.log('');
+    console.log('  Claude Code Session Indexer — Web');
+    console.log('  ---------------------');
+    console.log(`  Local dashboard:  http://${HOST}:${PORT}`);
+    console.log(`  Projects dir:     ${PROJECTS_DIR}`);
+    console.log(`  App data:         ${APP_DATA_DIR}`);
+    console.log('  Bound to 127.0.0.1 only — your transcripts stay private.');
+    console.log('  Press Ctrl+C to stop.');
+    console.log('');
+  });
 
-server.on('error', (e) => {
-  if (e.code === 'EADDRINUSE') {
-    console.error(`\n[claude-sessions] Port ${PORT} is already in use.`);
-    console.error(`Set a different one with:  PORT=4848 node server.js  (or  --port 4848)\n`);
-  } else {
-    console.error('[claude-sessions] Server error:', e.message);
-  }
-  process.exit(1);
-});
+  server.on('error', (e) => {
+    if (e.code === 'EADDRINUSE') {
+      console.error(`\n[claude-sessions] Port ${PORT} is already in use.`);
+      console.error(`Set a different one with:  PORT=4848 node server.js  (or  --port 4848)\n`);
+    } else {
+      console.error('[claude-sessions] Server error:', e.message);
+    }
+    process.exit(1);
+  });
+}
+
+module.exports = {
+  redactSecrets, rateFor, modelTier, insertProgressSection, upsertClaudeBlock,
+  UUID_RE, HANDOFF_CLAUDE_START, HANDOFF_CLAUDE_END,
+};
