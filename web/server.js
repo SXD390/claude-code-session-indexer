@@ -1438,8 +1438,10 @@ function readBody(req) {
 async function serveStatic(req, res, pathname) {
   let rel = pathname === '/' ? 'index.html' : pathname.replace(/^\/+/, '');
   const filePath = path.join(PUBLIC_DIR, rel);
-  // Prevent path traversal.
-  if (!filePath.startsWith(PUBLIC_DIR)) {
+  // Prevent path traversal. Require the resolved path to be PUBLIC_DIR itself or
+  // strictly inside it — a bare startsWith(PUBLIC_DIR) would also accept sibling
+  // directories such as "<public>-secret".
+  if (filePath !== PUBLIC_DIR && !filePath.startsWith(PUBLIC_DIR + path.sep)) {
     res.writeHead(403); res.end('Forbidden'); return;
   }
   let st;
@@ -1455,12 +1457,52 @@ async function serveStatic(req, res, pathname) {
   fs.createReadStream(filePath).pipe(res);
 }
 
+// ---------------------------------------------------------------------------
+// Local trust boundary — CSRF & DNS-rebinding protection
+// ---------------------------------------------------------------------------
+// This dashboard serves private transcripts and can spawn terminals / the
+// `claude` CLI / write files into projects, so any *other* website open in the
+// user's browser must be unable to drive it. We never emit CORS headers, and:
+//   1. Host must be a loopback literal     → defeats DNS rebinding (a rebound
+//      attacker page still sends Host: attacker.example)
+//   2. Origin, when present, must be ours   → blocks cross-origin fetch / form POST
+//   3. /api/* must carry X-CSI-Request: 1   → any cross-origin attempt to add it
+//      forces a CORS preflight the server never approves; simple (no-preflight)
+//      requests can't include a custom header at all.
+
+function hostHeaderOk(req) {
+  const host = (req.headers.host || '').toLowerCase();
+  return /^(127\.0\.0\.1|localhost|\[::1\]|::1)(:\d+)?$/.test(host);
+}
+
+function originHeaderOk(req) {
+  const origin = req.headers.origin;
+  if (!origin) return true; // same-origin GET / non-browser client — other checks apply
+  return /^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$/.test(origin.toLowerCase());
+}
+
 const server = http.createServer(async (req, res) => {
+  // Trust boundary: reject anything not unambiguously from the local dashboard.
+  // Applies to every request (static assets included) so a DNS-rebound page can't
+  // even load the app. No Access-Control-* headers are ever sent.
+  if (!hostHeaderOk(req) || !originHeaderOk(req)) {
+    res.writeHead(403, { 'Content-Type': 'text/plain' });
+    res.end('Forbidden');
+    return;
+  }
+
   // WHATWG URL API (url.parse is deprecated); host is irrelevant for routing.
   const parsed = new URL(req.url, 'http://127.0.0.1');
   let pathname;
   try { pathname = decodeURIComponent(parsed.pathname); } catch (_) { pathname = parsed.pathname; }
   const method = req.method;
+
+  // Every /api/* call must carry our custom header. A cross-origin page can't set
+  // it without a CORS preflight this server never approves, and a simple request
+  // (which would sail through same-origin checks) can't include it at all.
+  if (pathname.startsWith('/api/') && req.headers['x-csi-request'] !== '1') {
+    return sendJson(res, 403, { error: 'Forbidden', code: 'CSRF' });
+  }
 
   try {
     // --- API routes ---

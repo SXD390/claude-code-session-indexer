@@ -211,10 +211,20 @@
     }
   }
 
+  // Every /api/* request carries a custom header. A cross-origin attacker can't
+  // attach it without triggering a CORS preflight the server never approves, so
+  // this (together with the server's Host/Origin checks) blocks CSRF and DNS
+  // rebinding against the dashboard. Keep ALL API calls going through here.
+  function apiFetch(url, opts) {
+    opts = opts || {};
+    const headers = Object.assign({}, opts.headers, { 'X-CSI-Request': '1' });
+    return fetch(url, Object.assign({}, opts, { headers }));
+  }
+
   // ---- data load ----
   async function loadSessions(isInitial) {
     try {
-      const r = await fetch('/api/sessions', { cache: 'no-store' });
+      const r = await apiFetch('/api/sessions', { cache: 'no-store' });
       const data = await r.json();
       state.sessions = data.sessions || [];
       state.scannedAt = data.scannedAt;
@@ -648,7 +658,7 @@
     if (state.selectedId === id) { $('#briefCard').innerHTML = briefCardHTML(s); hydrateIcons($('#briefCard')); }
     status('Generating pickup brief via claude CLI…');
     try {
-      const r = await fetch('/api/sessions/' + encodeURIComponent(id) + '/brief', { method: 'POST' });
+      const r = await apiFetch('/api/sessions/' + encodeURIComponent(id) + '/brief', { method: 'POST' });
       const data = await r.json();
       state.briefing[id] = false;
       if (!r.ok) throw new Error(data.error || 'Brief failed');
@@ -777,7 +787,7 @@
     if (state.handoffs[id] || state.handoffLoading[id]) return; // already have it / generating
     if (!s.handoff) return; // nothing saved server-side
     try {
-      const r = await fetch('/api/sessions/' + encodeURIComponent(id) + '/handoff', { cache: 'no-store' });
+      const r = await apiFetch('/api/sessions/' + encodeURIComponent(id) + '/handoff', { cache: 'no-store' });
       if (!r.ok) return;
       const data = await r.json();
       state.handoffs[id] = data;
@@ -794,7 +804,7 @@
     rerenderHandoff(s);
     status('Preparing handoff via claude CLI…');
     try {
-      const r = await fetch('/api/sessions/' + encodeURIComponent(id) + '/handoff', { method: 'POST' });
+      const r = await apiFetch('/api/sessions/' + encodeURIComponent(id) + '/handoff', { method: 'POST' });
       const data = await r.json();
       state.handoffLoading[id] = false;
       if (!r.ok) throw new Error(data.error || 'Handoff failed');
@@ -822,7 +832,7 @@
     const include = !!state.includeClaudeMd[id] && !!record.claudeSection;
     status('Writing handoff files…');
     try {
-      const r = await fetch('/api/sessions/' + encodeURIComponent(id) + '/handoff/write', {
+      const r = await apiFetch('/api/sessions/' + encodeURIComponent(id) + '/handoff/write', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ includeClaudeMd: include }),
@@ -879,7 +889,7 @@
   async function loadUsageCard(s) {
     if (state.usageDetail[s.sessionId]) return; // already have model chips
     try {
-      const r = await fetch('/api/sessions/' + encodeURIComponent(s.sessionId) + '/usage', { cache: 'no-store' });
+      const r = await apiFetch('/api/sessions/' + encodeURIComponent(s.sessionId) + '/usage', { cache: 'no-store' });
       const data = await r.json();
       state.usageDetail[s.sessionId] = data.byModel || [];
       if (state.selectedId === s.sessionId) {
@@ -893,7 +903,7 @@
     const chat = $('#chat');
     if (state.previews[s.sessionId]) { renderChat(chat, state.previews[s.sessionId]); return; }
     try {
-      const r = await fetch('/api/sessions/' + encodeURIComponent(s.sessionId) + '/preview', { cache: 'no-store' });
+      const r = await apiFetch('/api/sessions/' + encodeURIComponent(s.sessionId) + '/preview', { cache: 'no-store' });
       const data = await r.json();
       state.previews[s.sessionId] = data.messages || [];
       if (state.selectedId === s.sessionId) renderChat(chat, state.previews[s.sessionId]);
@@ -949,7 +959,7 @@
     const btn = $('#genSummaryBtn'); if (btn) btn.disabled = true;
     status('Generating summary via claude CLI…');
     try {
-      const r = await fetch('/api/sessions/' + encodeURIComponent(id) + '/summary', { method: 'POST' });
+      const r = await apiFetch('/api/sessions/' + encodeURIComponent(id) + '/summary', { method: 'POST' });
       const data = await r.json();
       state.generating[id] = false;
       if (!r.ok) throw new Error(data.error || 'Summary failed');
@@ -971,7 +981,7 @@
     status('Opening terminal…');
     const btn = $('#resumeBtn'); if (btn) { btn.disabled = true; }
     try {
-      const r = await fetch('/api/sessions/' + encodeURIComponent(id) + '/resume', { method: 'POST' });
+      const r = await apiFetch('/api/sessions/' + encodeURIComponent(id) + '/resume', { method: 'POST' });
       const data = await r.json();
       if (!r.ok || !data.ok) throw new Error(data.error || 'Resume failed');
       status('Terminal opened — resuming session', 'ok');
@@ -1048,7 +1058,7 @@
     try {
       const p = rangeToParams();
       const qs = new URLSearchParams(p).toString();
-      const r = await fetch('/api/usage' + (qs ? '?' + qs : ''), { cache: 'no-store' });
+      const r = await apiFetch('/api/usage' + (qs ? '?' + qs : ''), { cache: 'no-store' });
       state.usage = await r.json();
       state.usageLoading = false;
       renderInsights();
@@ -1416,7 +1426,7 @@
     const seq = ++state.deepSeq;
     state.deepLoading = true;
     try {
-      const r = await fetch('/api/search?q=' + encodeURIComponent(q), { cache: 'no-store' });
+      const r = await apiFetch('/api/search?q=' + encodeURIComponent(q), { cache: 'no-store' });
       const data = await r.json();
       if (seq !== state.deepSeq) return; // superseded
       state.deepResults = data;
