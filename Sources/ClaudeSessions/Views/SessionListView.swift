@@ -25,6 +25,11 @@ struct SessionListView: View {
                     Button("Copy Resume Command") { ResumeService.copy(session.resumeCommand) }
                     Button("Copy Session ID") { ResumeService.copy(session.sessionId) }
                     Divider()
+                    Button("Prepare Handoff") {
+                        selectedSessionId = session.sessionId
+                        store.generateHandoff(for: session)
+                    }
+                    Divider()
                     Button("Reveal Transcript in Finder") { ResumeService.revealTranscript(session: session) }
                     if session.cwd != nil {
                         Button("Open Project Folder") { ResumeService.openProjectInFinder(session: session) }

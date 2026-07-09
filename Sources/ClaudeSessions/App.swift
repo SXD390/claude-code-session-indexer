@@ -25,6 +25,18 @@ struct ClaudeSessionsApp: App {
            CommandLine.arguments.count > idx + 1 {
             Self.runBriefTest(sessionId: CommandLine.arguments[idx + 1])
         }
+        // Headless handoff test: `ClaudeSessions --handoff-test <sessionId>` — generates and
+        // prints the three sections (does NOT write files into any project directory).
+        if let idx = CommandLine.arguments.firstIndex(of: "--handoff-test"),
+           CommandLine.arguments.count > idx + 1 {
+            Self.runHandoffTest(sessionId: CommandLine.arguments[idx + 1])
+        }
+        // Headless write test: `ClaudeSessions --handoff-write-test <dir>` — unit-drives the
+        // file-writing logic against a throwaway directory (no `claude -p`, no real project).
+        if let idx = CommandLine.arguments.firstIndex(of: "--handoff-write-test"),
+           CommandLine.arguments.count > idx + 1 {
+            Self.runHandoffWriteTest(dir: CommandLine.arguments[idx + 1])
+        }
     }
 
     private static func runUsageTest() {
@@ -88,6 +100,110 @@ struct ClaudeSessionsApp: App {
             sema.signal()
         }
         sema.wait()
+        exit(0)
+    }
+
+    private static func runHandoffTest(sessionId: String) {
+        let listing = TranscriptScanner.listTranscripts(excludingProjectPaths: [])
+        guard let entry = listing.first(where: { $0.url.lastPathComponent.hasPrefix(sessionId) }) else {
+            print("session not found: \(sessionId)"); exit(1)
+        }
+        let meta = TranscriptScanner.parseTranscript(
+            url: entry.url, projectKey: entry.projectKey, mtime: entry.mtime, size: entry.size)
+        print("Packaging handoff for \(meta.displayTitle)…  (\(meta.userMessageCount) prompts)")
+        let sema = DispatchSemaphore(value: 0)
+        Task.detached {
+            let result = await HandoffService.generate(session: meta)
+            switch result {
+            case .success(let h):
+                print("\n===PROGRESS===\n\(h.progress)")
+                print("\n===CLAUDE===\n\(h.claude ?? "NONE")")
+                print("\n===KICKSTART===\n\(h.kickstart)")
+                print("\n===END===")
+                // Persist into handoffs.json so the app can render it (end-to-end verification).
+                // This is the app-support cache only — NO files are written into any project dir.
+                let stored = StoredHandoff(
+                    progress: h.progress, claude: h.claude, kickstart: h.kickstart,
+                    generatedAt: Date(), sessionLastActivity: meta.lastActivityAt, raw: h.raw)
+                let url = SessionStore.appSupportDir.appendingPathComponent("handoffs.json")
+                var map: [String: StoredHandoff] = [:]
+                if let data = try? Data(contentsOf: url),
+                   let existing = try? JSONDecoder().decode([String: StoredHandoff].self, from: data) {
+                    map = existing
+                }
+                map[meta.sessionId] = stored
+                if let data = try? JSONEncoder().encode(map) {
+                    try? data.write(to: url, options: .atomic)
+                    print("\n[persisted to handoffs.json — no project files written]")
+                }
+            case .failure(let err):
+                print("ERROR: \(err.localizedDescription)")
+            }
+            sema.signal()
+        }
+        sema.wait()
+        exit(0)
+    }
+
+    /// Exercises the file-writing logic (prepend / append / marker-replace) against a
+    /// throwaway directory, WITHOUT running `claude -p` or touching any real project.
+    private static func runHandoffWriteTest(dir: String) {
+        let cwd = URL(fileURLWithPath: dir)
+        var isDir: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: cwd.path, isDirectory: &isDir), isDir.boolValue else {
+            print("dir not found: \(dir)"); exit(1)
+        }
+        // A synthetic session whose cwd is the throwaway dir.
+        var meta = SessionMeta(sessionId: "write-test", transcriptPath: "/dev/null", projectKey: "test")
+        meta.cwd = cwd.path
+
+        func dump(_ label: String) {
+            print("\n──────── \(label) ────────")
+            for name in ["PROGRESS.md", "CLAUDE.md"] {
+                let u = cwd.appendingPathComponent(name)
+                let body = (try? String(contentsOf: u, encoding: .utf8)) ?? "<missing>"
+                print("=== \(name) ===\n\(body)")
+            }
+        }
+
+        let sectionA = """
+        ## 2026-07-10 — First Handoff
+        **Done**
+        - Implemented the Handoff feature
+        **Open threads**
+        - Wire up the context menu
+        **How to verify**
+        - swift build
+        """
+        let sectionB = """
+        ## 2026-07-11 — Second Handoff
+        **Done**
+        - Added the write-path test
+        **Open threads**
+        - none
+        **How to verify**
+        - .build/debug/ClaudeSessions --handoff-write-test /tmp/handoff-write-test
+        """
+        let claudeA = "## Build\n- `swift build`\n## Test\n- `.build/debug/ClaudeSessions --scan-test`"
+        let claudeB = "## Build\n- `swift build -c release`\n## Notes\n- Only writes inside session.cwd"
+
+        do {
+            print("Write test in: \(cwd.path)")
+            dump("INITIAL (fixtures)")
+
+            _ = try HandoffService.writeToProject(HandoffService.WriteRequest(
+                session: meta, progressSection: sectionA, claudeContent: claudeA, includeClaudeMd: true))
+            dump("AFTER WRITE #1 (prepend into existing PROGRESS, append/replace into CLAUDE)")
+
+            let written = try HandoffService.writeToProject(HandoffService.WriteRequest(
+                session: meta, progressSection: sectionB, claudeContent: claudeB, includeClaudeMd: true))
+            dump("AFTER WRITE #2 (newest section on top, CLAUDE block replaced not duplicated)")
+
+            print("\nwrote: \(written.map { $0.lastPathComponent }.joined(separator: ", "))")
+        } catch {
+            print("WRITE ERROR: \(error.localizedDescription)")
+            exit(1)
+        }
         exit(0)
     }
 

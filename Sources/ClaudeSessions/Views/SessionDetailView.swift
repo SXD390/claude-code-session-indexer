@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 struct SessionDetailView: View {
     @EnvironmentObject var store: SessionStore
@@ -20,6 +21,7 @@ struct SessionDetailView: View {
                 header
                 resumeCard
                 briefCard
+                HandoffCard(session: session)
                 summaryCard
                 usageCard
                 metadataCard
@@ -599,6 +601,327 @@ struct MessageBubble: View {
     private var bubbleBackground: some View {
         RoundedRectangle(cornerRadius: 12, style: .continuous)
             .fill(isUser ? Theme.coralTint.opacity(0.12) : Theme.cardRaised)
+    }
+}
+
+// MARK: - Handoff
+
+/// Packages a finished session into PROGRESS.md / CLAUDE.md files written into the
+/// project directory so a fresh Claude Code session can pick the work back up.
+/// Nothing is written until the user explicitly clicks "Write to Project".
+struct HandoffCard: View {
+    @EnvironmentObject var store: SessionStore
+    let session: SessionMeta
+
+    @State private var alsoUpdateClaude = false
+    @State private var initedFor: Date?
+    @State private var writtenPaths: [URL] = []
+    @State private var writeError: String?
+    @State private var copiedKickstart = false
+    @Environment(\.colorScheme) private var scheme
+
+    private var handoff: StoredHandoff? { store.handoffs[session.sessionId] }
+    private var isGenerating: Bool { store.generatingHandoffFor.contains(session.sessionId) }
+
+    private var cwdURL: URL? {
+        guard let cwd = session.cwd, !cwd.isEmpty else { return nil }
+        return URL(fileURLWithPath: cwd)
+    }
+    private var cwdValid: Bool {
+        guard let url = cwdURL else { return false }
+        var isDir: ObjCBool = false
+        return FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir) && isDir.boolValue
+    }
+    private var progressExists: Bool {
+        guard let url = cwdURL else { return false }
+        return FileManager.default.fileExists(atPath: url.appendingPathComponent("PROGRESS.md").path)
+    }
+    private var claudeExists: Bool {
+        guard let url = cwdURL else { return false }
+        return FileManager.default.fileExists(atPath: url.appendingPathComponent("CLAUDE.md").path)
+    }
+
+    var body: some View {
+        Card(title: "Handoff", systemImage: "shippingbox.fill", accent: Theme.coral, gradientIcon: true) {
+            VStack(alignment: .leading, spacing: 14) {
+                if let h = handoff {
+                    generated(h)
+                } else {
+                    empty
+                }
+                if let error = store.handoffErrors[session.sessionId] {
+                    Label(error, systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption).foregroundStyle(.red).textSelection(.enabled)
+                }
+            }
+        }
+        .onAppear { syncToggle() }
+        .onChange(of: handoff?.generatedAt) { _, _ in syncToggle() }
+    }
+
+    /// On first display of a (new) handoff: default the CLAUDE.md toggle ON when the file
+    /// doesn't exist yet, OFF when it does (respect the user's own file); clear write state.
+    private func syncToggle() {
+        guard let gen = handoff?.generatedAt, gen != initedFor else { return }
+        initedFor = gen
+        alsoUpdateClaude = !claudeExists
+        writtenPaths = []
+        writeError = nil
+    }
+
+    // MARK: Empty state
+
+    private var empty: some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Package this session's work")
+                    .font(.system(size: 13, weight: .semibold))
+                Text("Prepare a handoff so a fresh Claude Code session can pick it up.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer()
+            actionButton(label: "Prepare Handoff")
+        }
+    }
+
+    // MARK: Generated state
+
+    @ViewBuilder
+    private func generated(_ h: StoredHandoff) -> some View {
+        if !cwdValid {
+            Label("Project directory not found — files can't be written for this session.",
+                  systemImage: "folder.badge.questionmark")
+                .font(.caption).foregroundStyle(.orange)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+
+        // PROGRESS.md preview
+        section(label: "PROGRESS.md",
+                note: progressExists ? "prepends a new dated section — existing content is preserved"
+                                     : "will create PROGRESS.md") {
+            fileBox(h.progress, maxHeight: 210)
+        }
+
+        // CLAUDE.md preview (hidden entirely when the model returned NONE)
+        if let claude = h.claude, !claude.isEmpty {
+            VStack(alignment: .leading, spacing: 7) {
+                HStack(spacing: 8) {
+                    sectionLabel("CLAUDE.md")
+                    Spacer()
+                    Toggle("Also update CLAUDE.md", isOn: $alsoUpdateClaude)
+                        .toggleStyle(.switch)
+                        .controlSize(.mini)
+                        .labelsHidden()
+                        .tint(Theme.coral)
+                        .disabled(!writtenPaths.isEmpty)
+                }
+                Text(claudeExists ? "appends a marked section — your existing CLAUDE.md is never overwritten"
+                                  : "will create CLAUDE.md")
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(.tertiary)
+                if alsoUpdateClaude {
+                    fileBox(HandoffService.markerBlock(content: claude), maxHeight: 170)
+                }
+            }
+        }
+
+        // KICKSTART — copyable terminal block (never written to disk)
+        if !h.kickstart.isEmpty {
+            kickstartBlock(h.kickstart)
+        }
+
+        // Write state / actions
+        if writtenPaths.isEmpty {
+            actionsRow(h)
+        } else {
+            writtenState
+        }
+
+        if let err = writeError {
+            Label(err, systemImage: "exclamationmark.triangle.fill")
+                .font(.caption).foregroundStyle(.red).textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private func actionsRow(_ h: StoredHandoff) -> some View {
+        HStack(spacing: 10) {
+            Button {
+                performWrite(h)
+            } label: {
+                Label("Write to Project", systemImage: "square.and.arrow.down.on.square")
+            }
+            .buttonStyle(GradientButtonStyle())
+            .disabled(!cwdValid)
+            .help(cwdValid ? "Writes PROGRESS.md" + (writesClaude(h) ? " and CLAUDE.md" : "") + " into \(session.cwd ?? "")"
+                           : "No valid project directory for this session")
+
+            actionButton(label: "Regenerate")
+
+            Spacer(minLength: 6)
+
+            VStack(alignment: .trailing, spacing: 2) {
+                Text("Generated \(h.generatedAt.formatted(.relative(presentation: .named)))")
+                    .font(.caption).foregroundStyle(.tertiary)
+                if store.handoffIsStale(for: session) {
+                    Label("New activity since", systemImage: "exclamationmark.circle.fill")
+                        .font(.caption).foregroundStyle(.orange)
+                }
+            }
+        }
+    }
+
+    private var writtenState: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Theme.running)
+                    .padding(.top, 1)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Wrote \(writtenPaths.count) file\(writtenPaths.count == 1 ? "" : "s") to the project")
+                        .font(.system(size: 12.5, weight: .semibold))
+                    ForEach(writtenPaths, id: \.self) { url in
+                        Text(url.path)
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                }
+            }
+            HStack(spacing: 10) {
+                Button {
+                    NSWorkspace.shared.activateFileViewerSelecting(writtenPaths)
+                } label: {
+                    Label("Reveal in Finder", systemImage: "folder")
+                }
+                .buttonStyle(GradientButtonStyle())
+
+                actionButton(label: "Regenerate")
+                Spacer()
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Theme.running.opacity(0.08), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous).strokeBorder(Theme.running.opacity(0.25), lineWidth: 1))
+    }
+
+    private func writesClaude(_ h: StoredHandoff) -> Bool {
+        alsoUpdateClaude && (h.claude?.isEmpty == false)
+    }
+
+    private func performWrite(_ h: StoredHandoff) {
+        writeError = nil
+        let req = HandoffService.WriteRequest(
+            session: session,
+            progressSection: h.progress,
+            claudeContent: h.claude,
+            includeClaudeMd: alsoUpdateClaude)
+        do {
+            writtenPaths = try HandoffService.writeToProject(req)
+        } catch {
+            writtenPaths = []
+            writeError = error.localizedDescription
+        }
+    }
+
+    // MARK: Building blocks
+
+    @ViewBuilder
+    private func actionButton(label: String) -> some View {
+        if isGenerating {
+            HStack(spacing: 6) {
+                ProgressView().controlSize(.small).scaleEffect(0.8)
+                Text("Packaging…").font(.callout).foregroundStyle(.secondary)
+            }
+        } else if label == "Regenerate" {
+            Button { store.generateHandoff(for: session) } label: {
+                Label(label, systemImage: "arrow.triangle.2.circlepath")
+            }
+            .buttonStyle(SoftButtonStyle())
+        } else {
+            Button { store.generateHandoff(for: session) } label: {
+                Label(label, systemImage: "shippingbox")
+            }
+            .buttonStyle(SoftButtonStyle())
+        }
+    }
+
+    private func sectionLabel(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 9.5, weight: .semibold, design: .rounded))
+            .tracking(0.5)
+            .foregroundStyle(.tertiary)
+    }
+
+    @ViewBuilder
+    private func section<Content: View>(label: String, note: String, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(spacing: 8) {
+                sectionLabel(label)
+                Text(note)
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(.tertiary)
+                Spacer()
+            }
+            content()
+        }
+    }
+
+    /// A document-style, monospaced, scrollable preview of file content that WOULD be written.
+    private func fileBox(_ text: String, maxHeight: CGFloat) -> some View {
+        ScrollView {
+            Text(text)
+                .font(.system(size: 11.5, design: .monospaced))
+                .foregroundStyle(.primary)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(12)
+        }
+        .frame(maxHeight: maxHeight)
+        .background(Theme.field, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous).strokeBorder(Theme.border, lineWidth: 1))
+    }
+
+    /// KICKSTART — reuses the Pickup Brief's NEXT PROMPT terminal-block styling.
+    private func kickstartBlock(_ text: String) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            sectionLabel("KICKSTART PROMPT")
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: "text.cursor")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(Theme.coralHi)
+                    .padding(.top, 2)
+                Text(text)
+                    .font(.system(size: 12.5, design: .monospaced))
+                    .foregroundStyle(Color(hex: 0xEDE6DF))
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .padding(14)
+            .background(Theme.terminal, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous).strokeBorder(.white.opacity(0.06), lineWidth: 1))
+
+            Button {
+                ResumeService.copy(text)
+                copiedKickstart = true
+                Task {
+                    try? await Task.sleep(nanoseconds: 1_500_000_000)
+                    copiedKickstart = false
+                }
+            } label: {
+                Label(copiedKickstart ? "Copied to clipboard" : "Copy kickstart prompt",
+                      systemImage: copiedKickstart ? "checkmark" : "doc.on.doc")
+            }
+            .buttonStyle(GradientButtonStyle())
+        }
     }
 }
 

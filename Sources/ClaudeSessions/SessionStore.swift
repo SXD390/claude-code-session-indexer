@@ -21,6 +21,11 @@ final class SessionStore: ObservableObject {
     @Published var generatingBriefFor: Set<String> = []
     @Published var briefErrors: [String: String] = [:]
 
+    // Handoffs
+    @Published var handoffs: [String: StoredHandoff] = [:]
+    @Published var generatingHandoffFor: Set<String> = []
+    @Published var handoffErrors: [String: String] = [:]
+
     // Deep search progress
     @Published var deepScanned = 0
     @Published var deepTotal = 0
@@ -36,6 +41,7 @@ final class SessionStore: ObservableObject {
     private var summariesURL: URL { Self.appSupportDir.appendingPathComponent("summaries.json") }
     private var usageCacheURL: URL { Self.appSupportDir.appendingPathComponent("usage-cache.json") }
     private var briefsURL: URL { Self.appSupportDir.appendingPathComponent("briefs.json") }
+    private var handoffsURL: URL { Self.appSupportDir.appendingPathComponent("handoffs.json") }
 
     /// Summary generation runs `claude -p` with this cwd; its own transcripts land in a
     /// project dir we exclude from scans so the app never lists its own summary runs.
@@ -54,6 +60,7 @@ final class SessionStore: ObservableObject {
     init() {
         loadSummaries()
         loadBriefs()
+        loadHandoffs()
         loadUsageCache()
     }
 
@@ -249,6 +256,36 @@ final class SessionStore: ObservableObject {
 
     func briefIsStale(for session: SessionMeta) -> Bool {
         guard let stored = briefs[session.sessionId] else { return false }
+        guard let old = stored.sessionLastActivity, let now = session.lastActivityAt else { return false }
+        return now > old.addingTimeInterval(60)
+    }
+
+    // MARK: - Handoffs
+
+    func generateHandoff(for session: SessionMeta) {
+        guard !generatingHandoffFor.contains(session.sessionId) else { return }
+        generatingHandoffFor.insert(session.sessionId)
+        handoffErrors[session.sessionId] = nil
+
+        Task.detached(priority: .userInitiated) {
+            let result = await HandoffService.generate(session: session)
+            await MainActor.run {
+                self.generatingHandoffFor.remove(session.sessionId)
+                switch result {
+                case .success(let parsed):
+                    self.handoffs[session.sessionId] = StoredHandoff(
+                        progress: parsed.progress, claude: parsed.claude, kickstart: parsed.kickstart,
+                        generatedAt: Date(), sessionLastActivity: session.lastActivityAt, raw: parsed.raw)
+                    self.saveHandoffs()
+                case .failure(let err):
+                    self.handoffErrors[session.sessionId] = err.localizedDescription
+                }
+            }
+        }
+    }
+
+    func handoffIsStale(for session: SessionMeta) -> Bool {
+        guard let stored = handoffs[session.sessionId] else { return false }
         guard let old = stored.sessionLastActivity, let now = session.lastActivityAt else { return false }
         return now > old.addingTimeInterval(60)
     }
@@ -465,6 +502,19 @@ final class SessionStore: ObservableObject {
     private func saveBriefs() {
         if let data = try? JSONEncoder().encode(briefs) {
             try? data.write(to: briefsURL, options: .atomic)
+        }
+    }
+
+    private func loadHandoffs() {
+        if let data = try? Data(contentsOf: handoffsURL),
+           let map = try? JSONDecoder().decode([String: StoredHandoff].self, from: data) {
+            handoffs = map
+        }
+    }
+
+    private func saveHandoffs() {
+        if let data = try? JSONEncoder().encode(handoffs) {
+            try? data.write(to: handoffsURL, options: .atomic)
         }
     }
 }

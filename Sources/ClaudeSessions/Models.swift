@@ -104,6 +104,21 @@ struct StoredBrief: Codable {
     let raw: String
 }
 
+/// A persisted "Handoff" package — parsed into the three sections that get written
+/// into the session's project directory (PROGRESS.md / CLAUDE.md) plus the kickstart prompt.
+struct StoredHandoff: Codable {
+    /// Dated PROGRESS.md section body.
+    let progress: String
+    /// Durable CLAUDE.md knowledge; nil when the model returned NONE.
+    let claude: String?
+    /// Ready-to-paste kickstart prompt (never written to disk).
+    let kickstart: String
+    let generatedAt: Date
+    let sessionLastActivity: Date?
+    /// Raw model output, kept as a fallback when parsing is imperfect.
+    let raw: String
+}
+
 /// One deep-search hit inside a transcript, resolved with its session's metadata.
 struct DeepSearchHit: Identifiable, Hashable {
     let id = UUID()
