@@ -1,0 +1,8 @@
+.build/
+.swiftpm/
+dist/*.app
+dist/AppIcon.iconset/
+*.xcodeproj
+.DS_Store
+node_modules/
+npm-debug.log
