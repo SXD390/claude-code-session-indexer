@@ -24,9 +24,10 @@ jobs:
         uses: github/codeql-action/init@v3
         with:
           languages: javascript-typescript
-          # The web server + SPA are the only JS in the repo.
-          paths:
-            - web
+          # The web server + SPA under web/ are the only JS/TS in the repo.
+          config: |
+            paths:
+              - web
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v3
